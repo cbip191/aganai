@@ -48,6 +48,26 @@ def get_all_tickers():
     return list(cik_map.values())
 
 
+def check_listing_status(ticker):
+    try:
+        tk = yf.Ticker(ticker)
+        info = tk.info
+        cap = info.get("marketCap")
+        price = info.get("regularMarketPrice") or info.get("currentPrice")
+        if cap and price:
+            return "active"
+        hist = tk.history(period="5d")
+        if hist.empty:
+            return "delisted"
+        from datetime import datetime, timedelta
+        last_date = hist.index[-1].to_pydatetime().replace(tzinfo=None)
+        if (datetime.now() - last_date).days > 30:
+            return "delisted"
+        return "active"
+    except Exception:
+        return "unknown"
+
+
 def get_price_history(ticker, period="max", interval="1wk"):
     log.info("%s — fetching price history (period=%s, interval=%s)", ticker, period, interval)
     t0 = time.time()
@@ -158,6 +178,15 @@ XBRL_TAGS = {
         "WeightedAverageNumberOfDilutedSharesOutstanding",
         "WeightedAverageNumberOfSharesOutstandingBasic",
     ],
+    "r_and_d": [
+        "ResearchAndDevelopmentExpense",
+        "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost",
+    ],
+    "acquisitions": [
+        "PaymentsToAcquireBusinessesNetOfCashAcquired",
+        "PaymentsToAcquireBusinessesGross",
+        "BusinessCombinationConsiderationTransferred1",
+    ],
 }
 
 
@@ -245,6 +274,9 @@ def get_10k_financials(ticker):
             row["fcf"] = ocf - capex
         else:
             row["fcf"] = None
+        inv_parts = [row.get("capex"), row.get("r_and_d"), row.get("acquisitions")]
+        inv_sum = sum(v for v in inv_parts if v is not None)
+        row["total_investment"] = inv_sum if any(v is not None for v in inv_parts) else None
         result[year] = row
 
     missing_fields = [f for f, v in field_data.items() if not v]

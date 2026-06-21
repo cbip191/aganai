@@ -76,11 +76,11 @@
             <td><a href="/company/{{ c.ticker }}">{{ c.ticker }}</a></td>
             <td>{{ c.name or "—" }}</td>
             <td>{{ c.sector or "—" }}</td>
-            <td>{{ "${:,.0f}B".format(c.market_cap / 1e9) if c.market_cap else "—" }}</td>
-            <td>{{ "${:,.0f}B".format(c.fcf / 1e9) if c.fcf else "—" }}</td>
-            <td>{{ "${:,.0f}B".format(c.revenue / 1e9) if c.revenue else "—" }}</td>
-            <td>{{ "${:,.0f}B".format(c.debt / 1e9) if c.debt else "—" }}</td>
-            <td>{{ "${:,.0f}B".format(c.cash / 1e9) if c.cash else "—" }}</td>
+            <td>{{ "${:,.0f}M".format(c.market_cap / 1e6) if c.market_cap else "—" }}</td>
+            <td>{{ "${:,.0f}M".format(c.fcf / 1e6) if c.fcf else "—" }}</td>
+            <td>{{ "${:,.0f}M".format(c.revenue / 1e6) if c.revenue else "—" }}</td>
+            <td>{{ "${:,.0f}M".format(c.debt / 1e6) if c.debt else "—" }}</td>
+            <td>{{ "${:,.0f}M".format(c.cash / 1e6) if c.cash else "—" }}</td>
             <td>{{ c.years }}</td>
         </tr>
         {% endfor %}

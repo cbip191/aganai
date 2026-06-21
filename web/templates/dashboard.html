@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h1 style="margin-bottom: 20px;">Dashboard</h1>
+
+<div class="stats">
+    <div class="stat">
+        <div class="value">{{ total_companies }}</div>
+        <div class="label">Companies Listed</div>
+    </div>
+    <div class="stat">
+        <div class="value">{{ with_financials }} <span style="font-size:14px; color:#636e72;">/ {{ total_companies }}</span></div>
+        <div class="label">With Financials</div>
+    </div>
+    <div class="stat">
+        <div class="value">{{ with_prices }} <span style="font-size:14px; color:#636e72;">/ {{ total_companies }}</span></div>
+        <div class="label">With Price History</div>
+    </div>
+    <div class="stat">
+        <div class="value">{{ with_sector }} <span style="font-size:14px; color:#636e72;">/ {{ total_companies }}</span></div>
+        <div class="label">With Sector Data</div>
+    </div>
+    <div class="stat">
+        <div class="value">{{ total_failures }}</div>
+        <div class="label">Last Run Failures</div>
+    </div>
+    <div class="stat">
+        <div class="value">{{ pipeline_state }}</div>
+        <div class="label">Pipeline Status</div>
+    </div>
+</div>
+
+<div class="card" style="margin-top: 20px;">
+    <h2>Quick Actions</h2>
+    <div class="toolbar">
+        <form method="POST" action="/api/tickers/update" style="display:inline;">
+            <button class="btn btn-primary" type="submit">Update Tickers</button>
+        </form>
+        <form method="POST" action="/api/pipeline/fetch-missing" style="display:inline;">
+            <input type="hidden" name="data_type" value="financials">
+            <button class="btn btn-secondary" type="submit">Fetch Missing Financials</button>
+        </form>
+        <form method="POST" action="/api/pipeline/fetch-missing" style="display:inline;">
+            <input type="hidden" name="data_type" value="prices">
+            <button class="btn btn-secondary" type="submit">Fetch Missing Prices</button>
+        </form>
+        <form method="POST" action="/api/pipeline/retry" style="display:inline;">
+            <button class="btn btn-secondary" type="submit">Retry Failures</button>
+        </form>
+    </div>
+</div>
+
+{% if recent_caps %}
+<div class="card">
+    <h2>Latest Market Caps (Today)</h2>
+    <table>
+        <thead><tr><th>Ticker</th><th>Market Cap</th></tr></thead>
+        <tbody>
+        {% for row in recent_caps %}
+        <tr>
+            <td><a href="/company/{{ row.ticker }}">{{ row.ticker }}</a></td>
+            <td>${{ "{:,.0f}".format(row.market_cap / 1e6) }}M</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

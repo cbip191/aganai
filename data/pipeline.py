@@ -1,13 +1,13 @@
-import json
 import logging
-import sqlite3
 import time
 from datetime import datetime, timezone
 
 import requests
 
 from config import DB_PATH, MAX_RETRIES, PROGRESS_LOG_INTERVAL, SEC_RATE_LIMIT
-from data_fetcher import get_10k_financials, get_all_tickers, get_company_info, get_market_caps, get_price_history
+from db import init_db
+from data.fetcher import get_10k_financials, get_all_tickers, get_company_info, get_market_caps, get_price_history, check_listing_status
+from data.store import _save_financials, _save_market_cap, _load_completed, _load_delisted, _filter_active, _save_failures, _load_failures
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -17,7 +17,6 @@ logging.basicConfig(
 log = logging.getLogger("pipeline")
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
-FAILURES_PATH = "failures.json"
 
 pipeline_status = {
     "running": False,
@@ -65,53 +64,33 @@ def _finish_status(elapsed, failures):
     pipeline_status["failures"] = failures
 
 
-def _init_db(path):
-    db = sqlite3.connect(path)
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS companies (
-            ticker TEXT PRIMARY KEY,
-            name TEXT,
-            cik TEXT,
-            sector TEXT,
-            industry TEXT,
-            updated_at TEXT
-        )
-    """)
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS market_caps (
-            ticker TEXT,
-            market_cap REAL,
-            fetch_date TEXT,
-            PRIMARY KEY (ticker, fetch_date)
-        )
-    """)
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS financials (
-            ticker TEXT,
-            year INTEGER,
-            operating_cf REAL,
-            capex REAL,
-            fcf REAL,
-            revenue REAL,
-            net_income REAL,
-            debt REAL,
-            cash REAL,
-            shares REAL,
-            fetched_at TEXT,
-            PRIMARY KEY (ticker, year)
-        )
-    """)
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS price_history (
-            ticker TEXT,
-            date TEXT,
-            close_price REAL,
-            volume INTEGER,
-            PRIMARY KEY (ticker, date)
-        )
-    """)
-    db.commit()
-    return db
+def _is_retryable(error):
+    if isinstance(error, requests.exceptions.ConnectionError):
+        return True
+    if isinstance(error, requests.exceptions.Timeout):
+        return True
+    if isinstance(error, requests.exceptions.HTTPError):
+        resp = error.response
+        if resp is not None and resp.status_code in RETRYABLE_STATUS_CODES:
+            return True
+    return False
+
+
+def _retry(fn, args, max_retries=MAX_RETRIES):
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            result = fn(*args)
+            return True, result
+        except Exception as e:
+            last_error = e
+            if not _is_retryable(e):
+                return False, e
+            if attempt < max_retries:
+                delay = 2 ** (attempt + 1)
+                log.warning("  Retry %d/%d in %ds — %s", attempt + 1, max_retries, delay, e)
+                time.sleep(delay)
+    return False, last_error
 
 
 def update_tickers(tickers_to_update=None):
@@ -121,7 +100,7 @@ def update_tickers(tickers_to_update=None):
     pipeline_status["progress"] = "Fetching SEC ticker list..."
     t0 = time.time()
 
-    db = _init_db(DB_PATH)
+    db = init_db(DB_PATH)
     now = datetime.now(timezone.utc).isoformat()
 
     all_tickers = get_all_tickers()
@@ -184,65 +163,62 @@ def update_tickers(tickers_to_update=None):
     return len(all_tickers)
 
 
-def _load_completed(db, table):
-    rows = db.execute(f"SELECT DISTINCT ticker FROM {table}").fetchall()
-    return {r[0] for r in rows}
+def scan_listing_status(tickers_to_scan=None):
+    log.info("Scanning listing status...")
+    _reset_status()
+    pipeline_status["phase"] = "scanning status"
+    t0 = time.time()
 
-
-def _save_financials(db, ticker, data):
+    db = init_db(DB_PATH)
     now = datetime.now(timezone.utc).isoformat()
-    for year, row in data.items():
+
+    if tickers_to_scan:
+        to_scan = [t.upper() for t in tickers_to_scan]
+    else:
+        rows = db.execute("SELECT ticker FROM companies WHERE status = 'unknown' OR status IS NULL").fetchall()
+        to_scan = [r[0] for r in rows]
+
+    pipeline_status["total"] = len(to_scan)
+    log.info("Scanning %d tickers for listing status...", len(to_scan))
+
+    active_count = 0
+    delisted_count = 0
+
+    for i, ticker in enumerate(to_scan):
+        if not _check_control():
+            break
+
+        status = check_listing_status(ticker)
         db.execute(
-            """INSERT OR REPLACE INTO financials
-               (ticker, year, operating_cf, capex, fcf, revenue, net_income, debt, cash, shares, fetched_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                ticker, year, row.get("operating_cf"), row.get("capex"),
-                row.get("fcf"), row.get("revenue"), row.get("net_income"),
-                row.get("debt"), row.get("cash"), row.get("shares"), now,
-            ),
+            "UPDATE companies SET status = ?, updated_at = ? WHERE ticker = ?",
+            (status, now, ticker),
         )
+
+        if status == "active":
+            active_count += 1
+        elif status == "delisted":
+            delisted_count += 1
+
+        pipeline_status["succeeded"] = active_count
+        pipeline_status["failed"] = delisted_count
+        pipeline_status["processed"] = i + 1
+
+        if (i + 1) % PROGRESS_LOG_INTERVAL == 0 or i == len(to_scan) - 1:
+            msg = f"Status scan: {i+1}/{len(to_scan)} — {active_count} active, {delisted_count} delisted"
+            pipeline_status["progress"] = msg
+            log.info(msg)
+
+        if (i + 1) % 10 == 0:
+            db.commit()
+
     db.commit()
-
-
-def _save_market_cap(db, ticker, cap, fetch_date):
-    db.execute(
-        "INSERT OR REPLACE INTO market_caps (ticker, market_cap, fetch_date) VALUES (?, ?, ?)",
-        (ticker, cap, fetch_date),
-    )
-    db.commit()
-
-
-def _is_retryable(error):
-    if isinstance(error, requests.exceptions.ConnectionError):
-        return True
-    if isinstance(error, requests.exceptions.Timeout):
-        return True
-    if isinstance(error, requests.exceptions.HTTPError):
-        resp = error.response
-        if resp is not None and resp.status_code in RETRYABLE_STATUS_CODES:
-            return True
-    return False
-
-
-def _retry(fn, args, max_retries=MAX_RETRIES):
-    last_error = None
-    for attempt in range(max_retries + 1):
-        try:
-            result = fn(*args)
-            return True, result
-        except Exception as e:
-            last_error = e
-            if not _is_retryable(e):
-                return False, e
-            if attempt < max_retries:
-                delay = 2 ** (attempt + 1)
-                log.warning("  Retry %d/%d in %ds — %s", attempt + 1, max_retries, delay, e)
-                time.sleep(delay)
-    return False, last_error
+    _finish_status(time.time() - t0, [])
+    log.info("Status scan complete: %d active, %d delisted", active_count, delisted_count)
+    db.close()
 
 
 def _fetch_all_financials(tickers, db, refresh=False):
+    tickers = _filter_active(tickers, db)
     if refresh:
         remaining = list(tickers)
         log.info("Financials: %d total, refreshing all", len(tickers))
@@ -300,6 +276,7 @@ def _fetch_all_financials(tickers, db, refresh=False):
 
 
 def _fetch_all_market_caps(tickers, db):
+    tickers = _filter_active(tickers, db)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     already_today = db.execute(
         "SELECT DISTINCT ticker FROM market_caps WHERE fetch_date = ?", (today,)
@@ -318,23 +295,31 @@ def _fetch_all_market_caps(tickers, db):
     for ticker, cap in caps.items():
         _save_market_cap(db, ticker, cap, today)
 
+    now = datetime.now(timezone.utc).isoformat()
     failures = []
     for ticker in remaining:
         if ticker not in caps:
+            db.execute(
+                "UPDATE companies SET status = 'delisted', updated_at = ? WHERE ticker = ? AND (status = 'unknown' OR status IS NULL)",
+                (now, ticker),
+            )
             failures.append({
                 "ticker": ticker,
-                "error": "no market cap returned",
+                "error": "no market cap returned — marked as delisted",
                 "retryable": False,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": now,
             })
+    db.commit()
 
     elapsed = time.time() - t0
-    log.info("Market caps: %d succeeded, %d failed in %.1fs",
-             len(caps), len(failures), elapsed)
+    delisted_count = sum(1 for f in failures if "delisted" in f["error"])
+    log.info("Market caps: %d succeeded, %d failed (%d marked delisted) in %.1fs",
+             len(caps), len(failures), delisted_count, elapsed)
     return failures
 
 
 def _fetch_all_prices(tickers, db):
+    tickers = _filter_active(tickers, db)
     completed = _load_completed(db, "price_history")
     remaining = [t for t in tickers if t not in completed]
     log.info("Prices: %d total, %d already done, %d remaining",
@@ -396,22 +381,60 @@ def _fetch_all_prices(tickers, db):
     return failures
 
 
-def _save_failures(failures):
-    with open(FAILURES_PATH, "w") as f:
-        json.dump(failures, f, indent=2)
-    log.info("Saved %d failures to %s", len(failures), FAILURES_PATH)
+def evaluate_valuations(tickers=None):
+    from analytics.investment import analyze_all_companies
+    from analytics.sector import calculate_all_sectors
+    from analytics.valuation import evaluate_all, save_valuations
 
+    _reset_status()
+    pipeline_status["phase"] = "evaluating"
+    t0 = time.time()
 
-def _load_failures():
-    try:
-        with open(FAILURES_PATH) as f:
-            data = json.load(f)
-        tickers = [entry["ticker"] for entry in data]
-        log.info("Loaded %d failed tickers from %s", len(tickers), FAILURES_PATH)
-        return tickers
-    except FileNotFoundError:
-        log.warning("No %s found", FAILURES_PATH)
-        return []
+    db = init_db(DB_PATH)
+
+    if tickers:
+        ticker_list = [t.upper() for t in tickers]
+    else:
+        rows = db.execute("SELECT DISTINCT ticker FROM financials").fetchall()
+        ticker_list = [r[0] for r in rows]
+
+    pipeline_status["total"] = len(ticker_list)
+    log.info("Evaluating %d companies...", len(ticker_list))
+
+    pipeline_status["progress"] = "Step 1/3: Analyzing sectors..."
+    log.info("Step 1/3: Sector analysis")
+    calculate_all_sectors(db)
+
+    if pipeline_status["cancel_requested"]:
+        _finish_status(time.time() - t0, [])
+        db.close()
+        return
+
+    pipeline_status["progress"] = "Step 2/3: Analyzing investments..."
+    log.info("Step 2/3: Investment analysis")
+    analyze_all_companies(db, ticker_list)
+
+    if pipeline_status["cancel_requested"]:
+        _finish_status(time.time() - t0, [])
+        db.close()
+        return
+
+    pipeline_status["progress"] = "Step 3/3: Computing DCF valuations..."
+    log.info("Step 3/3: DCF valuations")
+    results = evaluate_all(db, ticker_list)
+    save_valuations(db, results)
+
+    simple = sum(1 for r in results if r["model_used"] == "simple")
+    adjusted = sum(1 for r in results if r["model_used"] == "investment-adjusted")
+    pipeline_status["succeeded"] = len(results)
+    pipeline_status["processed"] = len(ticker_list)
+
+    elapsed = time.time() - t0
+    _finish_status(elapsed, [])
+    pipeline_status["progress"] = f"Evaluated {len(results)} companies ({simple} simple, {adjusted} investment-adjusted) in {elapsed:.1f}s"
+    log.info("Evaluation complete: %d simple, %d investment-adjusted", simple, adjusted)
+
+    db.close()
 
 
 def run_pipeline(tickers=None, retry_failures=False, refresh_financials=False, fetch_prices=False):
@@ -421,7 +444,7 @@ def run_pipeline(tickers=None, retry_failures=False, refresh_financials=False, f
     log.info("=" * 60)
     t0 = time.time()
 
-    db = _init_db(DB_PATH)
+    db = init_db(DB_PATH)
 
     if retry_failures:
         ticker_list = _load_failures()

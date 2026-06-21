@@ -15,10 +15,10 @@
                     {% endfor %}
                 </select>
             </label>
-            <label>Min FCF ($B) <input type="number" name="min_fcf" step="0.1" value="{{ filters.min_fcf or '' }}" style="width:100px;"></label>
-            <label>Max Debt ($B) <input type="number" name="max_debt" step="0.1" value="{{ filters.max_debt or '' }}" style="width:100px;"></label>
-            <label>Min Revenue ($B) <input type="number" name="min_revenue" step="0.1" value="{{ filters.min_revenue or '' }}" style="width:100px;"></label>
-            <label>Min Cash ($B) <input type="number" name="min_cash" step="0.1" value="{{ filters.min_cash or '' }}" style="width:100px;"></label>
+            <label>Min FCF ($M) <input type="number" name="min_fcf" step="0.1" value="{{ filters.min_fcf or '' }}" style="width:100px;"></label>
+            <label>Max Debt ($M) <input type="number" name="max_debt" step="0.1" value="{{ filters.max_debt or '' }}" style="width:100px;"></label>
+            <label>Min Revenue ($M) <input type="number" name="min_revenue" step="0.1" value="{{ filters.min_revenue or '' }}" style="width:100px;"></label>
+            <label>Min Cash ($M) <input type="number" name="min_cash" step="0.1" value="{{ filters.min_cash or '' }}" style="width:100px;"></label>
             <button class="btn btn-primary btn-sm" type="submit">Apply</button>
             <a href="/screener" class="btn btn-secondary btn-sm">Reset</a>
         </div>
@@ -27,13 +27,10 @@
 
 <div class="card">
     <div class="toolbar">
-        <h2 style="margin-bottom:0;">Results ({{ results|length }})</h2>
+        <h2 style="margin-bottom:0;">Results ({{ results|length }} of {{ total_count }})</h2>
         <button class="btn btn-primary btn-sm" onclick="bulkRefetch()" style="margin-left:auto;">Refetch Selected</button>
         <button class="btn btn-secondary btn-sm" onclick="bulkEvaluate()">Re-evaluate Selected</button>
         <span id="selected-count" style="font-size: 13px; color: #636e72;"></span>
-    </div>
-    <div class="alert alert-info" style="margin-top:12px;">
-        DCF valuation column will be available once dcf_model.py is built. Currently showing raw financial filters only.
     </div>
     <table id="results-table">
         <thead>
@@ -48,7 +45,8 @@
                 <th>Debt</th>
                 <th>Cash</th>
                 <th>DCF Value</th>
-                <th>Margin of Safety</th>
+                <th>Margin</th>
+                <th>Model</th>
             </tr>
         </thead>
         <tbody>
@@ -58,17 +56,26 @@
             <td><a href="/company/{{ r.ticker }}">{{ r.ticker }}</a></td>
             <td>{{ r.name or "—" }}</td>
             <td>{{ r.sector or "—" }}</td>
-            <td>{{ "${:,.0f}B".format(r.market_cap / 1e9) if r.market_cap else "—" }}</td>
-            <td>{{ "${:,.0f}B".format(r.fcf / 1e9) if r.fcf else "—" }}</td>
-            <td>{{ "${:,.0f}B".format(r.revenue / 1e9) if r.revenue else "—" }}</td>
-            <td>{{ "${:,.0f}B".format(r.debt / 1e9) if r.debt else "—" }}</td>
-            <td>{{ "${:,.0f}B".format(r.cash / 1e9) if r.cash else "—" }}</td>
-            <td>—</td>
-            <td>—</td>
+            <td>{{ "${:,.0f}M".format(r.market_cap / 1e6) if r.market_cap else "—" }}</td>
+            <td>{{ "${:,.0f}M".format(r.fcf / 1e6) if r.fcf else "—" }}</td>
+            <td>{{ "${:,.0f}M".format(r.revenue / 1e6) if r.revenue else "—" }}</td>
+            <td>{{ "${:,.0f}M".format(r.debt / 1e6) if r.debt else "—" }}</td>
+            <td>{{ "${:,.0f}M".format(r.cash / 1e6) if r.cash else "—" }}</td>
+            <td>{{ "${:,.0f}M".format(r.intrinsic_value / 1e6) if r.intrinsic_value else "—" }}</td>
+            <td class="{{ 'positive' if r.margin_of_safety and r.margin_of_safety > 0 else 'negative' if r.margin_of_safety else '' }}">{{ "{:.0f}%".format(r.margin_of_safety * 100) if r.margin_of_safety is not none else "—" }}</td>
+            <td style="font-size:11px;">{{ r.model_used or "—" }}</td>
         </tr>
         {% endfor %}
         </tbody>
     </table>
+    {% if results|length < total_count %}
+    <div style="text-align:center; margin-top:16px;">
+        <button class="btn btn-primary" onclick="loadMore()">Load More ({{ total_count - results|length }} remaining)</button>
+    </div>
+    {% endif %}
+    {% if results|length >= total_count and total_count > 0 %}
+    <p style="text-align:center; margin-top:16px; font-size:13px; color:#636e72;">All {{ total_count }} results loaded</p>
+    {% endif %}
 </div>
 {% endblock %}
 
@@ -102,6 +109,12 @@ function bulkEvaluate() {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({tickers: tickers})
     }).then(r => r.json()).then(data => alert(data.message));
+}
+function loadMore() {
+    const params = new URLSearchParams(window.location.search);
+    const currentLimit = parseInt(params.get('limit') || '100');
+    params.set('limit', currentLimit + 100);
+    window.location.href = '/screener?' + params.toString();
 }
 </script>
 {% endblock %}

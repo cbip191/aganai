@@ -1,84 +1,123 @@
 # Aganai — Project Checklist
 
-## Layer 1: Data Ingestion
-- [x] `config.py` — Load settings from .env (discount rate, growth rate, projection years, SEC credentials, DB path, retry limits)
-- [x] `data_fetcher.py` — SEC EDGAR ticker list (~10,400 companies with CIK mapping)
-- [x] `data_fetcher.py` — 10-K financial data extraction (operating CF, capex, FCF, revenue, net income, debt, cash, shares)
-- [x] `data_fetcher.py` — XBRL tag handling with multiple fallback tags per field
-- [x] `data_fetcher.py` — Full-year vs quarterly filtering for 10-K entries
-- [x] `data_fetcher.py` — Market cap fetching via yfinance (batch, chunked)
-- [x] `data_fetcher.py` — Company info fetching (sector, industry) via yfinance
-- [x] `data_fetcher.py` — Weekly price history fetching via yfinance
-- [x] `data_fetcher.py` — CIK map caching with 30-day expiry
+## Architecture
+- [x] Microservice-ready package structure (data/, analytics/, web/)
+- [x] `db.py` — Single source of truth for DB schema and connections
+- [x] `run.py` — Unified entry point (web server + CLI)
+- [x] `ARCHITECTURE.md` — Full documentation of every file, function, route, table, and config
+- [x] No circular imports — clear dependency direction (data ← analytics ← web)
 
-## Layer 1.5: Pipeline & Orchestration
-- [x] `pipeline.py` — SQLite database schema (companies, market_caps, financials, price_history)
-- [x] `pipeline.py` — Checkpoint/resume (skip already-fetched tickers)
-- [x] `pipeline.py` — Retry with exponential backoff (2s/4s/8s, max 3 retries)
-- [x] `pipeline.py` — Retryable vs permanent error classification
-- [x] `pipeline.py` — SEC rate limiting (0.1s between requests)
-- [x] `pipeline.py` — Failure tracking and failures.json export
-- [x] `pipeline.py` — Progress logging with ETA and throughput
-- [x] `pipeline.py` — Pause/resume/cancel controls
-- [x] `pipeline.py` — Incremental DB commits (data visible during processing)
-- [x] `pipeline.py` — Update tickers function (SEC list + sector info, no financials)
-- [x] `pipeline.py` — Historical price fetching phase
-- [x] `pipeline.py` — Market caps stored with daily granularity (historical tracking)
-- [x] `pipeline.py` — CLI interface (--retry, --refresh-financials, --fetch-prices)
+## Data Service (`data/`)
 
-## Layer 2: Analytics Engine
-- [ ] `dcf_model.py` — DCF intrinsic value calculation
-- [ ] `dcf_model.py` — FCF growth rate estimation from historical data
-- [ ] `dcf_model.py` — Terminal value computation
-- [ ] `dcf_model.py` — Discount projected cash flows to present value
-- [ ] `valuation.py` — Market cap vs intrinsic value comparison
-- [ ] `valuation.py` — Margin of safety calculation
-- [ ] `screener.py` — Rank stocks by margin of safety
-- [ ] `screener.py` — Filter by sector, min margin of safety, custom criteria
+### data/fetcher.py — External API Integration
+- [x] SEC EDGAR ticker list (~10,400 companies with CIK mapping)
+- [x] 10-K financial data extraction (operating CF, capex, FCF, revenue, net income, debt, cash, shares)
+- [x] R&D and acquisitions XBRL fields
+- [x] XBRL tag handling with multiple fallback tags per field
+- [x] Full-year vs quarterly filtering for 10-K entries
+- [x] Market cap fetching via yfinance (batch, chunked)
+- [x] Company info fetching (sector, industry) via yfinance
+- [x] Weekly price history fetching via yfinance
+- [x] CIK map caching with 30-day expiry
+- [x] Listing status detection (active/delisted via yfinance)
 
-## Layer 3: Output
-- [ ] `report.py` — Terminal table output (tabulate)
-- [ ] `report.py` — CSV export of screener results
-- [ ] `main.py` — Unified CLI entry point for all operations
+### data/pipeline.py — Orchestration
+- [x] Checkpoint/resume (skip already-fetched tickers)
+- [x] Retry with exponential backoff (2s/4s/8s, max 3 retries)
+- [x] Retryable vs permanent error classification
+- [x] SEC rate limiting (0.1s between requests)
+- [x] Failure tracking and failures.json export
+- [x] Progress logging with ETA and throughput
+- [x] Pause/resume/cancel controls
+- [x] Incremental DB commits (data visible during processing)
+- [x] Update tickers function (SEC list + sector info)
+- [x] Historical price fetching phase
+- [x] Market caps stored with daily granularity
+- [x] Listing status scanning (scan_listing_status)
+- [x] Auto-mark delisted on failed market cap fetch
+- [x] Skip delisted tickers in all fetch operations
+- [x] DCF evaluation orchestration (evaluate_valuations)
 
-## Web Application
-- [x] `app.py` — Flask server with 5 pages
-- [x] Dashboard — Summary stats, quick action buttons (Run Pipeline, Retry, Update Tickers, Fetch Prices)
-- [x] Pipeline Control — Progress bar, pause/resume/cancel, run form with ticker input and refresh option
-- [x] Companies — Searchable, sortable, paginated table (100/page)
-- [x] Companies — Sector filter dropdown with multi-select and search
-- [x] Companies — Bulk select with Refetch Selected and Re-evaluate Selected
-- [x] Company Detail — Company name, sector, industry display
-- [x] Company Detail — Market cap history chart (Chart.js, weekly data from price_history)
-- [x] Company Detail — Financials table (all years, all fields)
-- [x] Company Detail — Inline edit modal for manual data overrides
-- [x] Company Detail — Single ticker refetch button
-- [x] Screener — Filter by sector, min FCF, max debt, min revenue, min cash
-- [x] Screener — Bulk select with refetch/evaluate actions
-- [ ] Screener — DCF Value column (placeholder, shows "—")
-- [ ] Screener — Margin of Safety column (placeholder, shows "—")
+### data/store.py — Database I/O
+- [x] Save/load financials, market caps, failures
+- [x] Load completed tickers, delisted tickers
+- [x] Filter active tickers
+
+### Data Coverage (in progress)
+- [x] Ticker list loaded (10,433 companies)
+- [ ] Listing status scanned (10,433 unknown)
+- [ ] Sector/industry data for all companies (551/10,433)
+- [ ] 10-K financials for all active companies (in progress)
+- [ ] Market cap data for all active companies
+- [ ] Price history for all active companies
+- [ ] Re-fetch financials with R&D and acquisitions fields
+
+## Analytics Service (`analytics/`)
+
+### analytics/dcf.py — DCF Calculation
+- [x] Simple DCF (CAGR-based, fallback for <7 years data)
+- [x] Investment-adjusted DCF (sector growth + company ROI + investment lag)
+- [x] FCF growth rate estimation (CAGR with -20%/+30% caps)
+- [x] Terminal value computation (Gordon Growth Model)
+- [x] Discount projected cash flows to present value
+
+### analytics/sector.py — Sector Analysis
+- [x] Weighted sector growth rate calculation
+- [x] Sector average ROI computation
+
+### analytics/investment.py — Investment Analysis
+- [x] Investment lag estimation (cross-correlation, 0-5yr)
+- [x] Company ROI series and trend analysis
+- [x] Company vs sector ROI effectiveness comparison
+
+### analytics/valuation.py — Valuation Orchestration
+- [x] Market cap vs intrinsic value comparison
+- [x] Margin of safety calculation
+- [x] Batch evaluation and DB persistence
+
+## Web Service (`web/`)
+
+### Pages
+- [x] Dashboard — Summary stats, coverage numbers, quick action buttons
+- [x] Pipeline Control — Progress bar, pause/resume/cancel, coverage bars, fetch controls
+- [x] Companies — Searchable, sortable, paginated (100/page), sector filter dropdown
+- [x] Company Detail — Valuation card, market cap chart, financials table, inline edit
+- [x] Screener — Filters, DCF Value, Margin of Safety, Model columns, load-more pagination
+
+### UI Controls
+- [x] "Fetch Missing" buttons (financials, prices, sectors)
+- [x] "Fetch by Sector" with multi-select
+- [x] "Fetch Specific Companies" with ticker input
+- [x] "Refresh Stale Data" with configurable age
+- [x] "Evaluate All Companies" button
+- [x] "Scan Unknown" for listing status
+- [x] Bulk select with Refetch/Re-evaluate
+- [x] Single ticker refetch and manual edit
 - [ ] Screener — Sort by DCF value or margin of safety
-- [ ] Bulk evaluate — Actually runs DCF calculation (currently returns placeholder message)
 
 ## Database
-- [x] `companies` table — ticker, name, cik, sector, industry, updated_at
-- [x] `market_caps` table — ticker, market_cap, fetch_date (daily historical)
-- [x] `financials` table — ticker, year, operating_cf, capex, fcf, revenue, net_income, debt, cash, shares
-- [x] `price_history` table — ticker, date, close_price, volume (weekly historical)
+- [x] `companies` — ticker, name, cik, sector, industry, status, updated_at
+- [x] `financials` — ticker, year, 13 financial fields + fetched_at
+- [x] `market_caps` — ticker, market_cap, fetch_date (daily historical)
+- [x] `price_history` — ticker, date, close_price, volume (weekly)
+- [x] `sector_metrics` — sector, growth_rate, avg_roi, num_companies
+- [x] `investment_metrics` — ticker, avg_roi, sector_avg_roi, lag, effectiveness, trend
+- [x] `valuations` — ticker, intrinsic_value, per_share_value, margin, model_used
 
 ## Documentation
-- [x] `README.md` — Project overview, methodology (Pure DCF + Net Debt), architecture diagram
-- [x] `README.md` — Data sources documentation (yfinance + SEC EDGAR)
-- [x] `README.md` — XBRL field reference table
-- [x] `README.md` — Configuration variables documentation
-- [x] `README.md` — Setup and usage instructions
-- [x] `README.md` — Roadmap with completion status
-- [x] `README.md` — Extension guide (balance sheet adjustments, alternative sources, new valuation methods)
-- [ ] `README.md` — Update roadmap to reflect current state (price history, web app)
+- [x] `README.md` — Project overview, methodology, data sources, setup
+- [x] `ARCHITECTURE.md` — Complete documentation of every file, function, route, table, config, and how-to guides
+- [x] `CHECKLIST.md` — Project completion tracker
+- [ ] `README.md` — Update to reflect new architecture and CLI usage
+
+## Output (Planned)
+- [ ] CSV export of screener results
+- [ ] Terminal table output
 
 ## Git & Deployment
 - [x] `.gitignore` — Python, .env, DB, cache files
 - [x] `requirements.txt` — All dependencies listed
 - [x] GitHub repo created (cbip191/aganai)
-- [ ] Initial commit with all current code
+- [x] Initial commit
+- [ ] Commit microservice refactor
 - [ ] CLAUDE.md for project-specific instructions

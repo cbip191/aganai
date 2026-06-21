@@ -13,6 +13,44 @@
     </form>
 </div>
 
+{% if valuation %}
+<div class="card">
+    <h2>DCF Valuation</h2>
+    <div class="stats" style="margin-bottom:12px;">
+        <div class="stat">
+            <div class="value">${{ "{:,.0f}M".format(valuation.intrinsic_value / 1e6) }}</div>
+            <div class="label">Intrinsic Value</div>
+        </div>
+        <div class="stat">
+            <div class="value">${{ "{:.2f}".format(valuation.per_share_value) }}</div>
+            <div class="label">Per Share Value</div>
+        </div>
+        {% if valuation.market_cap %}
+        <div class="stat">
+            <div class="value {{ 'positive' if valuation.margin_of_safety and valuation.margin_of_safety > 0 else 'negative' }}">
+                {{ "{:.0f}%".format(valuation.margin_of_safety * 100) if valuation.margin_of_safety is not none else "—" }}
+            </div>
+            <div class="label">Margin of Safety</div>
+        </div>
+        {% endif %}
+        <div class="stat">
+            <div class="value">{{ "{:.1f}%".format(valuation.growth_rate * 100) }}</div>
+            <div class="label">Growth Rate</div>
+        </div>
+    </div>
+    <p style="font-size:13px; color:#636e72;">
+        Model: <strong>{{ valuation.model_used }}</strong> |
+        Discount rate: {{ "{:.0f}%".format(valuation.discount_rate * 100) }} |
+        Calculated: {{ valuation.calculated_at[:10] }}
+        {% if inv_metrics %}
+        | Investment lag: {{ inv_metrics.investment_lag }}yr
+        | ROI effectiveness: {{ inv_metrics.effectiveness }}
+        | ROI trend: {{ inv_metrics.roi_trend }}
+        {% endif %}
+    </p>
+</div>
+{% endif %}
+
 <div class="card">
     <h2>Market Cap History</h2>
     {% if cap_dates %}
