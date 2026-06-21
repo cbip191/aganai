@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, flash, jsonify, redirect, request
 
 from data.fetcher import get_10k_financials, get_market_caps
-from data.pipeline import evaluate_valuations, pipeline_status, run_pipeline
+from data.pipeline import evaluate_valuations, run_pipeline
 from data.store import _save_financials, _save_market_cap
 from db import get_db, init_db
 from config import DB_PATH
@@ -72,8 +72,6 @@ def api_update_ticker(ticker):
 
 @bp.route("/api/companies/bulk-refetch", methods=["POST"])
 def api_bulk_refetch():
-    if pipeline_status["running"]:
-        return jsonify({"error": "Pipeline is already running"}), 409
     data = request.get_json()
     tickers = data.get("tickers", [])
     if not tickers:
@@ -85,8 +83,6 @@ def api_bulk_refetch():
 
 @bp.route("/api/companies/bulk-evaluate", methods=["POST"])
 def api_bulk_evaluate():
-    if pipeline_status["running"]:
-        return jsonify({"error": "Pipeline is already running"}), 409
     data = request.get_json()
     tickers = data.get("tickers", [])
     if not tickers:

@@ -35,7 +35,8 @@ def companies_page():
         SELECT c.ticker, c.name, c.sector, c.industry,
                mc.market_cap,
                f.fcf, f.revenue, f.debt, f.cash,
-               (SELECT COUNT(*) FROM financials WHERE ticker = c.ticker) as years
+               (SELECT COUNT(*) FROM financials WHERE ticker = c.ticker) as years,
+               f.data_source
         FROM companies c
         LEFT JOIN financials f ON f.ticker = c.ticker
             AND f.year = (SELECT MAX(year) FROM financials WHERE ticker = c.ticker)

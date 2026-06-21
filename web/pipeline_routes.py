@@ -3,7 +3,10 @@ from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request
 
-from data.pipeline import evaluate_valuations, pipeline_status, run_pipeline, scan_listing_status, update_tickers
+from data.pipeline import (
+    clear_finished_jobs, evaluate_valuations, fetch_all_data, pipeline_jobs, pipeline_status,
+    run_pipeline, scan_listing_status, update_tickers,
+)
 from db import get_db
 
 bp = Blueprint("pipeline", __name__)
@@ -15,11 +18,15 @@ def pipeline_page():
     total = db.execute("SELECT COUNT(*) FROM companies").fetchone()[0]
     active = db.execute("SELECT COUNT(*) FROM companies WHERE status = 'active'").fetchone()[0]
     delisted = db.execute("SELECT COUNT(*) FROM companies WHERE status = 'delisted'").fetchone()[0]
+    no_sec_data = db.execute("SELECT COUNT(*) FROM companies WHERE status = 'no_sec_data'").fetchone()[0]
+    no_data = db.execute("SELECT COUNT(*) FROM companies WHERE status = 'no_data'").fetchone()[0]
     unknown = db.execute("SELECT COUNT(*) FROM companies WHERE status = 'unknown' OR status IS NULL").fetchone()[0]
     coverage = {
         "total": total,
         "active": active,
         "delisted": delisted,
+        "no_sec_data": no_sec_data,
+        "no_data": no_data,
         "unknown": unknown,
         "financials": db.execute("SELECT COUNT(DISTINCT ticker) FROM financials").fetchone()[0],
         "market_caps": db.execute("SELECT COUNT(DISTINCT ticker) FROM market_caps").fetchone()[0],
@@ -31,38 +38,76 @@ def pipeline_page():
     ).fetchall()
     sectors = [r[0] for r in sectors]
     db.close()
-    return render_template("pipeline.html", status=pipeline_status, coverage=coverage, sectors=sectors)
+    return render_template("pipeline.html", jobs=pipeline_jobs, coverage=coverage, sectors=sectors)
 
 
 @bp.route("/api/pipeline/status")
 def api_pipeline_status():
-    return jsonify(pipeline_status)
+    result = {"jobs": {jid: dict(j) for jid, j in pipeline_jobs.items()}}
+    any_running = any(j["running"] for j in pipeline_jobs.values())
+    if any_running:
+        db = get_db()
+        result["coverage"] = {
+            "financials": db.execute("SELECT COUNT(DISTINCT ticker) FROM financials").fetchone()[0],
+            "market_caps": db.execute("SELECT COUNT(DISTINCT ticker) FROM market_caps").fetchone()[0],
+            "prices": db.execute("SELECT COUNT(DISTINCT ticker) FROM price_history").fetchone()[0],
+            "sectors": db.execute("SELECT COUNT(*) FROM companies WHERE sector != '' AND sector IS NOT NULL").fetchone()[0],
+            "active": db.execute("SELECT COUNT(*) FROM companies WHERE status = 'active'").fetchone()[0],
+            "no_sec_data": db.execute("SELECT COUNT(*) FROM companies WHERE status = 'no_sec_data'").fetchone()[0],
+            "no_data": db.execute("SELECT COUNT(*) FROM companies WHERE status = 'no_data'").fetchone()[0],
+            "unknown": db.execute("SELECT COUNT(*) FROM companies WHERE status = 'unknown' OR status IS NULL").fetchone()[0],
+        }
+        db.close()
+    return jsonify(result)
 
 
 @bp.route("/api/pipeline/pause", methods=["POST"])
 def api_pipeline_pause():
-    pipeline_status["paused"] = True
+    job_id = request.form.get("job_id") or request.get_json(silent=True, force=True).get("job_id") if request.data else None
+    if job_id and job_id in pipeline_jobs:
+        pipeline_jobs[job_id]["paused"] = True
+    else:
+        for j in pipeline_jobs.values():
+            if j["running"]:
+                j["paused"] = True
     return jsonify({"ok": True})
 
 
 @bp.route("/api/pipeline/resume", methods=["POST"])
 def api_pipeline_resume():
-    pipeline_status["paused"] = False
+    job_id = request.form.get("job_id") or request.get_json(silent=True, force=True).get("job_id") if request.data else None
+    if job_id and job_id in pipeline_jobs:
+        pipeline_jobs[job_id]["paused"] = False
+    else:
+        for j in pipeline_jobs.values():
+            if j["running"]:
+                j["paused"] = False
     return jsonify({"ok": True})
 
 
 @bp.route("/api/pipeline/cancel", methods=["POST"])
 def api_pipeline_cancel():
-    pipeline_status["cancel_requested"] = True
-    pipeline_status["paused"] = False
+    job_id = request.form.get("job_id") or request.get_json(silent=True, force=True).get("job_id") if request.data else None
+    if job_id and job_id in pipeline_jobs:
+        pipeline_jobs[job_id]["cancel_requested"] = True
+        pipeline_jobs[job_id]["paused"] = False
+    else:
+        for j in pipeline_jobs.values():
+            if j["running"]:
+                j["cancel_requested"] = True
+                j["paused"] = False
     return jsonify({"ok": True})
+
+
+@bp.route("/api/pipeline/clear", methods=["POST"])
+def api_pipeline_clear():
+    count = clear_finished_jobs()
+    flash(f"Cleared {count} finished jobs")
+    return redirect("/pipeline")
 
 
 @bp.route("/api/pipeline/run", methods=["POST"])
 def api_pipeline_run():
-    if pipeline_status["running"]:
-        flash("Pipeline is already running")
-        return redirect("/pipeline")
     tickers_str = request.form.get("tickers", "").strip()
     refresh = bool(request.form.get("refresh_financials"))
     tickers = [t.strip().upper() for t in tickers_str.split(",") if t.strip()] if tickers_str else None
@@ -72,11 +117,18 @@ def api_pipeline_run():
     return redirect("/pipeline")
 
 
+@bp.route("/api/pipeline/fetch-all", methods=["POST"])
+def api_fetch_all():
+    tickers_str = request.form.get("tickers", "").strip()
+    tickers = [t.strip().upper() for t in tickers_str.split(",") if t.strip()] if tickers_str else None
+    thread = threading.Thread(target=fetch_all_data, kwargs={"tickers": tickers}, daemon=True)
+    thread.start()
+    flash("Fetching all data (round-robin)")
+    return redirect("/pipeline")
+
+
 @bp.route("/api/pipeline/retry", methods=["POST"])
 def api_pipeline_retry():
-    if pipeline_status["running"]:
-        flash("Pipeline is already running")
-        return redirect("/pipeline")
     thread = threading.Thread(target=run_pipeline, kwargs={"retry_failures": True}, daemon=True)
     thread.start()
     flash("Retrying failed tickers")
@@ -85,9 +137,6 @@ def api_pipeline_retry():
 
 @bp.route("/api/pipeline/fetch-prices", methods=["POST"])
 def api_fetch_prices():
-    if pipeline_status["running"]:
-        flash("Pipeline is already running")
-        return redirect("/pipeline")
     tickers_str = request.form.get("tickers", "").strip()
     tickers = [t.strip().upper() for t in tickers_str.split(",") if t.strip()] if tickers_str else None
     thread = threading.Thread(target=run_pipeline, kwargs={"tickers": tickers, "fetch_prices": True}, daemon=True)
@@ -98,20 +147,14 @@ def api_fetch_prices():
 
 @bp.route("/api/pipeline/evaluate", methods=["POST"])
 def api_evaluate():
-    if pipeline_status["running"]:
-        flash("Pipeline is already running")
-        return redirect("/pipeline")
     thread = threading.Thread(target=evaluate_valuations, daemon=True)
     thread.start()
-    flash("Running DCF evaluation for all companies with financials")
+    flash("Running DCF evaluation")
     return redirect("/pipeline")
 
 
 @bp.route("/api/pipeline/fetch-missing", methods=["POST"])
 def api_fetch_missing():
-    if pipeline_status["running"]:
-        flash("Pipeline is already running")
-        return redirect("/pipeline")
     data_type = request.form.get("data_type", "financials")
     db = get_db()
     if data_type == "financials":
@@ -135,15 +178,12 @@ def api_fetch_missing():
     else:
         thread = threading.Thread(target=run_pipeline, kwargs={"tickers": missing}, daemon=True)
     thread.start()
-    flash(f"Fetching {data_type} for {len(missing)} companies missing data")
+    flash(f"Fetching {data_type} for {len(missing)} companies")
     return redirect("/pipeline")
 
 
 @bp.route("/api/pipeline/fetch-by-sector", methods=["POST"])
 def api_fetch_by_sector():
-    if pipeline_status["running"]:
-        flash("Pipeline is already running")
-        return redirect("/pipeline")
     sectors = request.form.getlist("sectors")
     data_type = request.form.get("data_type", "financials")
     if not sectors:
@@ -161,15 +201,12 @@ def api_fetch_by_sector():
     else:
         thread = threading.Thread(target=run_pipeline, kwargs={"tickers": tickers, "refresh_financials": data_type == "refresh"}, daemon=True)
     thread.start()
-    flash(f"Fetching {data_type} for {len(tickers)} companies in {', '.join(sectors)}")
+    flash(f"Fetching {data_type} for {len(tickers)} companies")
     return redirect("/pipeline")
 
 
 @bp.route("/api/pipeline/refresh-stale", methods=["POST"])
 def api_refresh_stale():
-    if pipeline_status["running"]:
-        flash("Pipeline is already running")
-        return redirect("/pipeline")
     days = request.form.get("days", 30, type=int)
     data_type = request.form.get("data_type", "financials")
     db = get_db()
@@ -191,27 +228,21 @@ def api_refresh_stale():
     else:
         thread = threading.Thread(target=run_pipeline, kwargs={"tickers": stale, "refresh_financials": True}, daemon=True)
     thread.start()
-    flash(f"Refreshing {data_type} for {len(stale)} companies with data older than {days} days")
+    flash(f"Refreshing {data_type} for {len(stale)} companies older than {days} days")
     return redirect("/pipeline")
 
 
 @bp.route("/api/tickers/update", methods=["POST"])
 def api_update_tickers():
-    if pipeline_status["running"]:
-        flash("Pipeline is already running")
-        return redirect("/pipeline")
     thread = threading.Thread(target=update_tickers, daemon=True)
     thread.start()
-    flash("Updating ticker list and sector data")
+    flash("Updating ticker list")
     return redirect("/pipeline")
 
 
 @bp.route("/api/pipeline/scan-status", methods=["POST"])
 def api_scan_status():
-    if pipeline_status["running"]:
-        flash("Pipeline is already running")
-        return redirect("/pipeline")
     thread = threading.Thread(target=scan_listing_status, daemon=True)
     thread.start()
-    flash("Scanning listing status for unknown tickers")
+    flash("Scanning listing status")
     return redirect("/pipeline")

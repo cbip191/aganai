@@ -1,20 +1,31 @@
 {% extends "base.html" %}
 {% block title %}Screener{% endblock %}
 {% block content %}
+<style>
+    #results-table { font-size: 12px; }
+    #results-table th { font-size: 11px; padding: 6px 8px; white-space: nowrap; }
+    #results-table td { padding: 6px 8px; white-space: nowrap; }
+    #results-table td:nth-child(3) { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+    th.sortable { cursor:pointer; user-select:none; }
+    th.sortable:hover { color:#0984e3; }
+    .sort-arrow { font-size:10px; margin-left:3px; }
+    .filter-btn { background:none; border:none; cursor:pointer; font-size:11px; color:#636e72; margin-left:3px; vertical-align:middle; }
+    .filter-btn:hover, .filter-btn.active { color:#0984e3; }
+    .dropdown-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; z-index:99; }
+    .sector-dropdown { display:none; position:absolute; background:#fff; border:1px solid #ddd; border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,0.12); z-index:100; width:260px; padding:8px 0; }
+    .sector-dropdown .dd-search { width:calc(100% - 16px); margin:0 8px 6px; padding:6px 8px; border:1px solid #ddd; border-radius:4px; font-size:13px; }
+    .sector-dropdown .dd-list { max-height:240px; overflow-y:auto; }
+    .sector-dropdown label { display:flex; align-items:center; gap:6px; padding:4px 12px; font-size:13px; cursor:pointer; }
+    .sector-dropdown label:hover { background:#f0f0f0; }
+    .sector-dropdown .dd-actions { display:flex; gap:6px; padding:6px 8px 2px; border-top:1px solid #eee; margin-top:4px; }
+</style>
+
 <h1 style="margin-bottom: 20px;">Screener</h1>
 
 <div class="card">
     <h2>Filters</h2>
-    <form method="GET" action="/screener">
+    <form method="GET" action="/screener" id="filter-form">
         <div class="toolbar">
-            <label>Sector
-                <select name="sector" style="min-width:150px;">
-                    <option value="">All Sectors</option>
-                    {% for s in sectors %}
-                    <option value="{{ s }}" {% if filters.sector == s %}selected{% endif %}>{{ s }}</option>
-                    {% endfor %}
-                </select>
-            </label>
             <label>Min FCF ($M) <input type="number" name="min_fcf" step="0.1" value="{{ filters.min_fcf or '' }}" style="width:100px;"></label>
             <label>Max Debt ($M) <input type="number" name="max_debt" step="0.1" value="{{ filters.max_debt or '' }}" style="width:100px;"></label>
             <label>Min Revenue ($M) <input type="number" name="min_revenue" step="0.1" value="{{ filters.min_revenue or '' }}" style="width:100px;"></label>
@@ -22,38 +33,70 @@
             <button class="btn btn-primary btn-sm" type="submit">Apply</button>
             <a href="/screener" class="btn btn-secondary btn-sm">Reset</a>
         </div>
+        {% for s in selected_sectors %}
+        <input type="hidden" name="sector" value="{{ s }}">
+        {% endfor %}
+        <input type="hidden" name="sort" value="{{ sort_by }}">
+        <input type="hidden" name="dir" value="{{ sort_dir }}">
     </form>
 </div>
+
+{% if selected_sectors %}
+<div style="margin:8px 0; display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+    <span style="font-size:12px; color:#636e72;">Filtered:</span>
+    {% for s in selected_sectors %}
+    <span style="background:#0984e3; color:#fff; padding:2px 8px; border-radius:10px; font-size:12px;">{{ s }} <span style="cursor:pointer; margin-left:2px;" onclick="removeSector('{{ s }}')">&times;</span></span>
+    {% endfor %}
+    <a href="javascript:void(0)" onclick="clearSectors()" style="font-size:12px; margin-left:4px;">Clear all</a>
+</div>
+{% endif %}
 
 <div class="card">
     <div class="toolbar">
         <h2 style="margin-bottom:0;">Results ({{ results|length }} of {{ total_count }})</h2>
-        <button class="btn btn-primary btn-sm" onclick="bulkRefetch()" style="margin-left:auto;">Refetch Selected</button>
+        <input type="text" id="search" placeholder="Search..." style="width:180px; margin-left:auto;" onkeyup="filterTable()">
+        <button class="btn btn-primary btn-sm" onclick="bulkRefetch()">Refetch Selected</button>
         <button class="btn btn-secondary btn-sm" onclick="bulkEvaluate()">Re-evaluate Selected</button>
         <span id="selected-count" style="font-size: 13px; color: #636e72;"></span>
     </div>
+
+    <div style="position:relative; display:inline-block;">
+        <div class="dropdown-overlay" id="dd-overlay" onclick="closeDropdown()"></div>
+        <div class="sector-dropdown" id="sector-dropdown">
+            <input type="text" class="dd-search" id="dd-search" placeholder="Search sectors..." oninput="filterSectors()">
+            <div class="dd-list" id="dd-list">
+                {% for s in sectors %}
+                <label class="dd-item"><input type="checkbox" value="{{ s }}" {% if s in selected_sectors %}checked{% endif %}> {{ s }}</label>
+                {% endfor %}
+            </div>
+            <div class="dd-actions">
+                <button class="btn btn-primary btn-sm" onclick="applySectors()">Apply</button>
+                <button class="btn btn-secondary btn-sm" onclick="closeDropdown()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <table id="results-table">
         <thead>
             <tr>
                 <th><input type="checkbox" id="select-all" onclick="toggleAll(this)"></th>
-                <th>Ticker</th>
-                <th>Name</th>
-                <th>Sector</th>
-                <th>Market Cap</th>
-                <th>FCF</th>
-                <th>Revenue</th>
-                <th>Debt</th>
-                <th>Cash</th>
-                <th>DCF Value</th>
-                <th>Margin</th>
-                <th>Model</th>
+                {% for col, label in [('ticker','Ticker'),('name','Name')] %}
+                <th class="sortable" onclick="sortBy('{{ col }}')">{{ label }}{% if sort_by == col %}<span class="sort-arrow">{{ "▲" if sort_dir == "asc" else "▼" }}</span>{% endif %}</th>
+                {% endfor %}
+                <th class="sortable" onclick="sortBy('sector')">
+                    Sector{% if sort_by == 'sector' %}<span class="sort-arrow">{{ "▲" if sort_dir == "asc" else "▼" }}</span>{% endif %}
+                    <button class="filter-btn {% if selected_sectors %}active{% endif %}" onclick="event.stopPropagation(); openDropdown()" title="Filter by sector">&#9660;</button>
+                </th>
+                {% for col, label in [('market_cap','Mkt Cap'),('fcf','FCF'),('revenue','Rev'),('debt','Debt'),('cash','Cash'),('dcf_value','DCF'),('margin','Margin'),('model','Model')] %}
+                <th class="sortable" onclick="sortBy('{{ col }}')">{{ label }}{% if sort_by == col %}<span class="sort-arrow">{{ "▲" if sort_dir == "asc" else "▼" }}</span>{% endif %}</th>
+                {% endfor %}
             </tr>
         </thead>
         <tbody>
         {% for r in results %}
         <tr>
             <td><input type="checkbox" class="ticker-cb" value="{{ r.ticker }}" onchange="updateCount()"></td>
-            <td><a href="/company/{{ r.ticker }}">{{ r.ticker }}</a></td>
+            <td><a href="/company/{{ r.ticker }}">{{ r.ticker }}</a>{% if r.data_source == 'yahoo_finance' %} <span style="background:#fdcb6e; color:#2d3436; padding:0 4px; border-radius:3px; font-size:10px;" title="Yahoo Finance data">YF</span>{% endif %}</td>
             <td>{{ r.name or "—" }}</td>
             <td>{{ r.sector or "—" }}</td>
             <td>{{ "${:,.0f}M".format(r.market_cap / 1e6) if r.market_cap else "—" }}</td>
@@ -63,7 +106,7 @@
             <td>{{ "${:,.0f}M".format(r.cash / 1e6) if r.cash else "—" }}</td>
             <td>{{ "${:,.0f}M".format(r.intrinsic_value / 1e6) if r.intrinsic_value else "—" }}</td>
             <td class="{{ 'positive' if r.margin_of_safety and r.margin_of_safety > 0 else 'negative' if r.margin_of_safety else '' }}">{{ "{:.0f}%".format(r.margin_of_safety * 100) if r.margin_of_safety is not none else "—" }}</td>
-            <td style="font-size:11px;">{{ r.model_used or "—" }}</td>
+            <td>{{ r.model_used or "—" }}</td>
         </tr>
         {% endfor %}
         </tbody>
@@ -81,8 +124,65 @@
 
 {% block scripts %}
 <script>
+const currentSort = '{{ sort_by }}';
+const currentDir = '{{ sort_dir }}';
+const currentSectors = {{ selected_sectors|tojson }};
+
+function buildUrl(params) {
+    const base = new URLSearchParams(window.location.search);
+    for (const [k, v] of Object.entries(params)) {
+        if (k === 'sector') {
+            base.delete('sector');
+            v.forEach(s => base.append('sector', s));
+        } else {
+            base.set(k, v);
+        }
+    }
+    return '/screener?' + base.toString();
+}
+
+function sortBy(col) {
+    let dir = 'desc';
+    if (col === currentSort) dir = currentDir === 'desc' ? 'asc' : 'desc';
+    if ((col === 'ticker' || col === 'name' || col === 'sector' || col === 'model') && col !== currentSort) dir = 'asc';
+    window.location.href = buildUrl({sort: col, dir: dir, limit: {{ current_limit }}});
+}
+
+function loadMore() {
+    window.location.href = buildUrl({limit: {{ current_limit + 100 }}});
+}
+
+function openDropdown() {
+    document.getElementById('sector-dropdown').style.display = 'block';
+    document.getElementById('dd-overlay').style.display = 'block';
+    document.getElementById('dd-search').focus();
+}
+function closeDropdown() {
+    document.getElementById('sector-dropdown').style.display = 'none';
+    document.getElementById('dd-overlay').style.display = 'none';
+}
+function filterSectors() {
+    const q = document.getElementById('dd-search').value.toUpperCase();
+    document.querySelectorAll('.dd-item').forEach(el => {
+        el.style.display = el.textContent.toUpperCase().includes(q) ? '' : 'none';
+    });
+}
+function applySectors() {
+    const checked = Array.from(document.querySelectorAll('#dd-list input:checked')).map(cb => cb.value);
+    window.location.href = buildUrl({sector: checked, limit: 100});
+}
+function removeSector(s) {
+    const sectors = currentSectors.filter(x => x !== s);
+    window.location.href = buildUrl({sector: sectors, limit: 100});
+}
+function clearSectors() {
+    window.location.href = buildUrl({sector: [], limit: 100});
+}
+
 function toggleAll(el) {
-    document.querySelectorAll('.ticker-cb').forEach(cb => cb.checked = el.checked);
+    document.querySelectorAll('.ticker-cb').forEach(cb => {
+        if (!cb.closest('tr').classList.contains('hidden')) cb.checked = el.checked;
+    });
     updateCount();
 }
 function updateCount() {
@@ -99,7 +199,10 @@ function bulkRefetch() {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({tickers: tickers})
-    }).then(() => window.location.href = '/pipeline');
+    }).then(r => r.json()).then(data => {
+        if (data.error) alert(data.error);
+        else window.location.href = '/pipeline';
+    });
 }
 function bulkEvaluate() {
     const tickers = getSelected();
@@ -108,13 +211,19 @@ function bulkEvaluate() {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({tickers: tickers})
-    }).then(r => r.json()).then(data => alert(data.message));
+    }).then(r => r.json()).then(data => {
+        if (data.error) alert(data.error);
+        else { alert(data.message); window.location.href = '/pipeline'; }
+    });
 }
-function loadMore() {
-    const params = new URLSearchParams(window.location.search);
-    const currentLimit = parseInt(params.get('limit') || '100');
-    params.set('limit', currentLimit + 100);
-    window.location.href = '/screener?' + params.toString();
+function filterTable() {
+    const q = document.getElementById('search').value.toUpperCase();
+    document.querySelectorAll('#results-table tbody tr').forEach(row => {
+        const text = row.textContent.toUpperCase();
+        const hide = q && !text.includes(q);
+        row.classList.toggle('hidden', hide);
+        row.style.display = hide ? 'none' : '';
+    });
 }
 </script>
 {% endblock %}

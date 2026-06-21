@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, render_template
 
-from data.pipeline import pipeline_status
+from data.pipeline import pipeline_jobs
 from db import get_db
 
 bp = Blueprint("dashboard", __name__)
@@ -19,8 +19,9 @@ def dashboard():
     total_market_caps = db.execute(
         "SELECT COUNT(DISTINCT ticker) FROM market_caps WHERE fetch_date = ?", (today,)
     ).fetchone()[0]
-    total_failures = len(pipeline_status.get("failures", []))
-    pipeline_state = "Running" if pipeline_status["running"] else "Idle"
+    active_jobs = sum(1 for j in pipeline_jobs.values() if j["running"])
+    pipeline_state = f"{active_jobs} running" if active_jobs else "Idle"
+    total_failures = sum(len(j.get("failures", [])) for j in pipeline_jobs.values())
 
     recent_caps = db.execute(
         "SELECT ticker, market_cap FROM market_caps WHERE fetch_date = ? ORDER BY market_cap DESC LIMIT 20",

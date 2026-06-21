@@ -6,11 +6,15 @@ from config import DB_PATH
 def get_db():
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA busy_timeout=5000")
     return db
 
 
 def init_db(path=None):
     db = sqlite3.connect(path or DB_PATH)
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA busy_timeout=5000")
 
     db.execute("""
         CREATE TABLE IF NOT EXISTS companies (
@@ -53,6 +57,7 @@ def init_db(path=None):
             r_and_d REAL,
             acquisitions REAL,
             total_investment REAL,
+            data_source TEXT DEFAULT 'sec_edgar',
             fetched_at TEXT,
             PRIMARY KEY (ticker, year)
         )
@@ -62,6 +67,10 @@ def init_db(path=None):
             db.execute(f"ALTER TABLE financials ADD COLUMN {col} REAL")
         except sqlite3.OperationalError:
             pass
+    try:
+        db.execute("ALTER TABLE financials ADD COLUMN data_source TEXT DEFAULT 'sec_edgar'")
+    except sqlite3.OperationalError:
+        pass
 
     db.execute("""
         CREATE TABLE IF NOT EXISTS price_history (

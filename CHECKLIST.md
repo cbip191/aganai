@@ -11,7 +11,9 @@
 
 ### data/fetcher.py — External API Integration
 - [x] SEC EDGAR ticker list (~10,400 companies with CIK mapping)
-- [x] 10-K financial data extraction (operating CF, capex, FCF, revenue, net income, debt, cash, shares)
+- [x] 10-K financial data extraction (SEC EDGAR XBRL)
+- [x] Yahoo Finance financials fallback (for foreign companies without SEC XBRL)
+- [x] `data_source` tracking — each financial row tagged "sec_edgar" or "yahoo_finance"
 - [x] R&D and acquisitions XBRL fields
 - [x] XBRL tag handling with multiple fallback tags per field
 - [x] Full-year vs quarterly filtering for 10-K entries
@@ -35,22 +37,25 @@
 - [x] Market caps stored with daily granularity
 - [x] Listing status scanning (scan_listing_status)
 - [x] Auto-mark delisted on failed market cap fetch
-- [x] Skip delisted tickers in all fetch operations
+- [x] Skip delisted and no_data tickers in all fetch operations
 - [x] DCF evaluation orchestration (evaluate_valuations)
+- [x] "Fetch All Data" round-robin (financials → market cap → prices per company)
+- [x] Yahoo Finance auto-fallback when SEC returns empty
+- [x] Company status tracking (active/delisted/no_sec_data/no_data/unknown)
 
 ### data/store.py — Database I/O
-- [x] Save/load financials, market caps, failures
-- [x] Load completed tickers, delisted tickers
+- [x] Save/load financials (with data_source), market caps, failures
+- [x] Load completed tickers, excluded tickers (delisted + no_data)
 - [x] Filter active tickers
 
 ### Data Coverage (in progress)
 - [x] Ticker list loaded (10,433 companies)
-- [ ] Listing status scanned (10,433 unknown)
+- [ ] Listing status fully scanned (4,399 active, 1,513 no SEC, 19 no data, 4,502 unknown)
 - [ ] Sector/industry data for all companies (551/10,433)
-- [ ] 10-K financials for all active companies (in progress)
-- [ ] Market cap data for all active companies
-- [ ] Price history for all active companies
-- [ ] Re-fetch financials with R&D and acquisitions fields
+- [x] 10-K financials fetching (4,400/10,433 — 239 from Yahoo Finance)
+- [ ] Market cap data for all active companies (95/4,399)
+- [ ] Price history for all active companies (109/4,399)
+- [ ] Re-fetch financials with R&D and acquisitions fields for older entries
 
 ## Analytics Service (`analytics/`)
 
@@ -75,16 +80,23 @@
 - [x] Margin of safety calculation
 - [x] Batch evaluation and DB persistence
 
+### Valuations Coverage
+- [ ] Run evaluation for all companies with financials (5/4,400 evaluated)
+
 ## Web Service (`web/`)
 
 ### Pages
 - [x] Dashboard — Summary stats, coverage numbers, quick action buttons
 - [x] Pipeline Control — Progress bar, pause/resume/cancel, coverage bars, fetch controls
 - [x] Companies — Searchable, sortable, paginated (100/page), sector filter dropdown
+- [x] Companies — YF badge for Yahoo Finance-sourced companies
 - [x] Company Detail — Valuation card, market cap chart, financials table, inline edit
+- [x] Company Detail — "Yahoo Finance data" label when applicable
 - [x] Screener — Filters, DCF Value, Margin of Safety, Model columns, load-more pagination
+- [x] Screener — YF badge for Yahoo Finance-sourced companies
 
 ### UI Controls
+- [x] "Fetch All Data" — round-robin per company (financials → market cap → prices)
 - [x] "Fetch Missing" buttons (financials, prices, sectors)
 - [x] "Fetch by Sector" with multi-select
 - [x] "Fetch Specific Companies" with ticker input
@@ -93,11 +105,13 @@
 - [x] "Scan Unknown" for listing status
 - [x] Bulk select with Refetch/Re-evaluate
 - [x] Single ticker refetch and manual edit
-- [ ] Screener — Sort by DCF value or margin of safety
+- [x] Screener — Sortable columns (all columns including DCF and margin)
+- [x] Screener — Multi-sector dropdown filter with search (same as Companies page)
+- [x] Screener — Text search across results
 
 ## Database
 - [x] `companies` — ticker, name, cik, sector, industry, status, updated_at
-- [x] `financials` — ticker, year, 13 financial fields + fetched_at
+- [x] `financials` — ticker, year, 13 financial fields + data_source + fetched_at
 - [x] `market_caps` — ticker, market_cap, fetch_date (daily historical)
 - [x] `price_history` — ticker, date, close_price, volume (weekly)
 - [x] `sector_metrics` — sector, growth_rate, avg_roi, num_companies
@@ -106,9 +120,10 @@
 
 ## Documentation
 - [x] `README.md` — Project overview, methodology, data sources, setup
-- [x] `ARCHITECTURE.md` — Complete documentation of every file, function, route, table, config, and how-to guides
+- [x] `ARCHITECTURE.md` — Complete documentation of every file, function, route, table, config
 - [x] `CHECKLIST.md` — Project completion tracker
-- [ ] `README.md` — Update to reflect new architecture and CLI usage
+- [ ] `README.md` — Update to reflect new architecture, Yahoo fallback, CLI usage
+- [ ] `ARCHITECTURE.md` — Update with fetch_all_data, Yahoo fallback, data_source column
 
 ## Output (Planned)
 - [ ] CSV export of screener results
@@ -119,5 +134,6 @@
 - [x] `requirements.txt` — All dependencies listed
 - [x] GitHub repo created (cbip191/aganai)
 - [x] Initial commit
-- [ ] Commit microservice refactor
+- [x] Microservice refactor commit
+- [ ] Commit latest changes (Yahoo fallback, fetch all data, data source tracking)
 - [ ] CLAUDE.md for project-specific instructions

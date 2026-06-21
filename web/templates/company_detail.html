@@ -61,7 +61,11 @@
 </div>
 
 <div class="card">
-    <h2>Financials (10-K)</h2>
+    <h2>Financials
+        {% if financials and financials[0].data_source == 'yahoo_finance' %}
+        <span style="background:#fdcb6e; color:#2d3436; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:600; margin-left:8px;">Yahoo Finance data</span>
+        {% endif %}
+    </h2>
     {% if financials %}
     <div style="overflow-x: auto;">
     <table>

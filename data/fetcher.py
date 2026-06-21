@@ -155,6 +155,8 @@ XBRL_TAGS = {
     ],
     "capex": [
         "PaymentsToAcquirePropertyPlantAndEquipment",
+        "PaymentsToAcquireProductiveAssets",
+        "CapitalExpenditureDiscontinuedOperations",
     ],
     "revenue": [
         "Revenues",
@@ -238,6 +240,68 @@ def _extract_annual_values(company_facts, tag_candidates):
     for c in candidates:
         merged.update(c)
     return merged
+
+
+def get_yahoo_financials(ticker):
+    log.info("%s — fetching financials from Yahoo Finance (fallback)", ticker)
+    t0 = time.time()
+    try:
+        tk = yf.Ticker(ticker)
+        cf = tk.cashflow
+        bs = tk.balance_sheet
+        inc = tk.financials
+        if cf is None or cf.empty:
+            log.warning("%s — no Yahoo Finance data available", ticker)
+            return {}
+
+        result = {}
+        for col in cf.columns:
+            year = col.year
+
+            def get_val(df, keys):
+                if df is None or df.empty:
+                    return None
+                for k in keys:
+                    if k in df.index and col in df.columns:
+                        v = df.loc[k, col]
+                        if v is not None and str(v) != "nan":
+                            return float(v)
+                return None
+
+            operating_cf = get_val(cf, ["Operating Cash Flow", "Total Cash From Operating Activities"])
+            capex = get_val(cf, ["Capital Expenditure", "Capital Expenditures"])
+            if capex and capex < 0:
+                capex = abs(capex)
+
+            row = {
+                "operating_cf": operating_cf,
+                "capex": capex,
+                "revenue": get_val(inc, ["Total Revenue", "Revenue"]),
+                "net_income": get_val(inc, ["Net Income", "Net Income From Continuing Operations"]),
+                "debt": get_val(bs, ["Long Term Debt", "Long Term Debt And Capital Lease Obligation"]),
+                "cash": get_val(bs, ["Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments"]),
+                "shares": get_val(bs, ["Ordinary Shares Number", "Share Issued"]),
+                "r_and_d": get_val(inc, ["Research And Development", "Research Development"]),
+                "acquisitions": get_val(cf, ["Acquisitions Net", "Purchase Of Business"]),
+                "data_source": "yahoo_finance",
+            }
+
+            if operating_cf is not None and capex is not None:
+                row["fcf"] = operating_cf - capex
+            else:
+                row["fcf"] = None
+
+            inv_parts = [row.get("capex"), row.get("r_and_d"), row.get("acquisitions")]
+            inv_sum = sum(abs(v) for v in inv_parts if v is not None)
+            row["total_investment"] = inv_sum if any(v is not None for v in inv_parts) else None
+
+            result[year] = row
+
+        log.info("%s — %d years from Yahoo Finance in %.1fs", ticker, len(result), time.time() - t0)
+        return result
+    except Exception as e:
+        log.warning("%s — Yahoo Finance fallback failed: %s", ticker, e)
+        return {}
 
 
 def get_10k_financials(ticker):

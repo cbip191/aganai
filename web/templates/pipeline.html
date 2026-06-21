@@ -2,92 +2,125 @@
 {% block title %}Pipeline{% endblock %}
 {% block content %}
 <style>
-    .progress-bar-container {
-        width: 100%; background: #eee; border-radius: 6px; height: 24px; margin: 12px 0; overflow: hidden;
-    }
-    .progress-bar-fill {
-        height: 100%; border-radius: 6px; transition: width 0.4s ease; display: flex; align-items: center; padding-left: 8px; font-size: 12px; font-weight: 600; color: #fff;
-    }
-    .progress-bar-fill.active { background: #0984e3; }
-    .progress-bar-fill.paused { background: #fdcb6e; color: #2d3436; }
-    .progress-bar-fill.cancelled { background: #d63031; }
-    .progress-bar-fill.complete { background: #00b894; }
-    .control-buttons { display: flex; gap: 8px; margin-top: 12px; }
+    .progress-bar-container { width:100%; background:#eee; border-radius:6px; height:24px; margin:8px 0; overflow:hidden; }
+    .progress-bar-fill { height:100%; border-radius:6px; transition:width 0.4s ease; display:flex; align-items:center; padding-left:8px; font-size:12px; font-weight:600; color:#fff; }
+    .progress-bar-fill.active { background:#0984e3; }
+    .progress-bar-fill.paused { background:#fdcb6e; color:#2d3436; }
+    .progress-bar-fill.cancelled { background:#d63031; }
+    .progress-bar-fill.complete { background:#00b894; }
     .coverage-bar { display:flex; align-items:center; gap:8px; margin:4px 0; font-size:13px; }
     .coverage-track { flex:1; background:#eee; border-radius:4px; height:8px; overflow:hidden; }
-    .coverage-fill { height:100%; background:#0984e3; border-radius:4px; }
-    .section-title { font-size:13px; color:#636e72; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; margin:16px 0 8px; }
+    .coverage-fill { height:100%; background:#0984e3; border-radius:4px; transition:width 0.4s; }
+    .job-card { border-left:4px solid #0984e3; margin-bottom:12px; padding:12px 16px; background:#fff; border-radius:0 6px 6px 0; box-shadow:0 1px 3px rgba(0,0,0,0.06); }
+    .job-card.paused { border-left-color:#fdcb6e; }
+    .job-card.complete { border-left-color:#00b894; }
+    .job-card.cancelled { border-left-color:#d63031; }
+    .job-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
+    .job-type { font-weight:700; font-size:14px; text-transform:uppercase; }
+    .job-meta { font-size:12px; color:#636e72; }
 </style>
 
 <h1 style="margin-bottom: 20px;">Pipeline Control</h1>
 
-<!-- Status -->
-<div class="card">
-    <h2>Status</h2>
-    <p><strong>Phase:</strong> <span id="state">{{ status.phase or "idle" }}</span>
-       <span id="paused-badge" style="display:none; background:#fdcb6e; color:#2d3436; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:600; margin-left:8px;">PAUSED</span>
-    </p>
-    <p><strong>Progress:</strong> <span id="progress">{{ status.progress or "—" }}</span></p>
-    <p><strong>Succeeded:</strong> <span id="succeeded">{{ status.succeeded }}</span> | <strong>Failed:</strong> <span id="failed">{{ status.failed }}</span></p>
-
-    <div class="progress-bar-container">
-        <div id="progress-bar" class="progress-bar-fill active" style="width: 0%;"></div>
+<!-- Active Jobs -->
+<div class="card" id="jobs-container">
+    <h2>Jobs</h2>
+    <div id="jobs-list">
+        {% if not jobs %}
+        <p style="color:#636e72; font-size:13px;">No active jobs. Start one below.</p>
+        {% endif %}
+        {% for jid, j in jobs.items() %}
+        <div class="job-card {{ 'paused' if j.paused else 'complete' if j.phase == 'complete' else 'cancelled' if j.phase == 'cancelled' else '' }}" id="job-{{ jid }}">
+            <div class="job-header">
+                <span class="job-type">{{ j.type }}</span>
+                <span class="job-meta">{{ jid }} | {{ j.phase }}{% if j.paused %} — PAUSED{% endif %}</span>
+            </div>
+            <p style="font-size:13px; margin:4px 0;">{{ j.progress or "Starting..." }}</p>
+            <p style="font-size:12px; color:#636e72;">Succeeded: {{ j.succeeded }} | Failed: {{ j.failed }} | {{ j.processed }}/{{ j.total }}</p>
+            <div class="progress-bar-container">
+                <div class="progress-bar-fill {{ 'paused' if j.paused else 'complete' if j.phase == 'complete' else 'cancelled' if j.phase == 'cancelled' else 'active' }}"
+                     style="width:{{ (j.processed / j.total * 100) if j.total > 0 else 0 }}%;"></div>
+            </div>
+            {% if j.running %}
+            <div style="display:flex; gap:6px; margin-top:4px;">
+                {% if j.paused %}
+                <button class="btn btn-primary btn-sm" onclick="jobAction('resume','{{ jid }}')">Resume</button>
+                {% else %}
+                <button class="btn btn-secondary btn-sm" onclick="jobAction('pause','{{ jid }}')">Pause</button>
+                {% endif %}
+                <button class="btn btn-danger btn-sm" onclick="if(confirm('Cancel this job?')) jobAction('cancel','{{ jid }}')">Cancel</button>
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
     </div>
-
-    <div class="control-buttons" id="controls" style="display:none;">
-        <button class="btn btn-secondary btn-sm" id="btn-pause" onclick="pausePipeline()">Pause</button>
-        <button class="btn btn-primary btn-sm" id="btn-resume" onclick="resumePipeline()" style="display:none;">Resume</button>
-        <button class="btn btn-danger btn-sm" id="btn-cancel" onclick="cancelPipeline()">Cancel</button>
-    </div>
+    {% if jobs %}
+    <form method="POST" action="/api/pipeline/clear" style="margin-top:8px;">
+        <button class="btn btn-secondary btn-sm" type="submit">Clear Finished Jobs</button>
+    </form>
+    {% endif %}
 </div>
 
 <!-- Data Coverage -->
 <div class="card">
     <h2>Data Coverage</h2>
-    <div style="display:flex; gap:16px; margin-bottom:12px; font-size:13px;">
+    <div style="display:flex; gap:16px; margin-bottom:12px; font-size:13px; flex-wrap:wrap;" id="status-counts">
         <span><strong>{{ coverage.total }}</strong> total</span>
-        <span style="color:#00b894;"><strong>{{ coverage.active }}</strong> active</span>
-        <span style="color:#d63031;"><strong>{{ coverage.delisted }}</strong> delisted</span>
-        <span style="color:#636e72;"><strong>{{ coverage.unknown }}</strong> unknown</span>
+        <span style="color:#00b894;"><strong id="cnt-active">{{ coverage.active }}</strong> active</span>
+        <span style="color:#d63031;"><strong id="cnt-delisted">{{ coverage.delisted }}</strong> delisted</span>
+        <span style="color:#fdcb6e;"><strong id="cnt-nosec">{{ coverage.no_sec_data }}</strong> no SEC data</span>
+        <span style="color:#d63031;"><strong id="cnt-nodata">{{ coverage.no_data }}</strong> no data</span>
+        <span style="color:#636e72;"><strong id="cnt-unknown">{{ coverage.unknown }}</strong> unknown</span>
         {% if coverage.unknown > 0 %}
         <form method="POST" action="/api/pipeline/scan-status" style="display:inline;">
-            <button class="btn btn-secondary btn-sm" type="submit" style="padding:2px 8px; font-size:11px;">Scan Unknown ({{ coverage.unknown }})</button>
+            <button class="btn btn-secondary btn-sm" type="submit" style="padding:2px 8px; font-size:11px;">Scan Unknown</button>
         </form>
         {% endif %}
     </div>
 
-    {% set base = coverage.active if coverage.active > 0 else coverage.total %}
+    {% set base = coverage.total %}
     {% set pct_fin = (coverage.financials / base * 100) if base > 0 else 0 %}
     {% set pct_cap = (coverage.market_caps / base * 100) if base > 0 else 0 %}
     {% set pct_prices = (coverage.prices / base * 100) if base > 0 else 0 %}
-    {% set pct_sectors = (coverage.sectors / coverage.total * 100) if coverage.total > 0 else 0 %}
+    {% set pct_sectors = (coverage.sectors / base * 100) if base > 0 else 0 %}
 
     <div class="coverage-bar">
         <span style="width:100px;">Financials</span>
-        <div class="coverage-track"><div class="coverage-fill" style="width:{{ pct_fin }}%;"></div></div>
-        <span>{{ coverage.financials }}/{{ base }} ({{ "%.0f"|format(pct_fin) }}%)</span>
+        <div class="coverage-track"><div class="coverage-fill" id="bar-fin" style="width:{{ pct_fin }}%;"></div></div>
+        <span id="lbl-fin">{{ coverage.financials }}/{{ base }} ({{ "%.0f"|format(pct_fin) }}%)</span>
     </div>
     <div class="coverage-bar">
         <span style="width:100px;">Market Caps</span>
-        <div class="coverage-track"><div class="coverage-fill" style="width:{{ pct_cap }}%;"></div></div>
-        <span>{{ coverage.market_caps }}/{{ base }} ({{ "%.0f"|format(pct_cap) }}%)</span>
+        <div class="coverage-track"><div class="coverage-fill" id="bar-cap" style="width:{{ pct_cap }}%;"></div></div>
+        <span id="lbl-cap">{{ coverage.market_caps }}/{{ base }} ({{ "%.0f"|format(pct_cap) }}%)</span>
     </div>
     <div class="coverage-bar">
         <span style="width:100px;">Prices</span>
-        <div class="coverage-track"><div class="coverage-fill" style="width:{{ pct_prices }}%;"></div></div>
-        <span>{{ coverage.prices }}/{{ base }} ({{ "%.0f"|format(pct_prices) }}%)</span>
+        <div class="coverage-track"><div class="coverage-fill" id="bar-prices" style="width:{{ pct_prices }}%;"></div></div>
+        <span id="lbl-prices">{{ coverage.prices }}/{{ base }} ({{ "%.0f"|format(pct_prices) }}%)</span>
     </div>
     <div class="coverage-bar">
         <span style="width:100px;">Sectors</span>
-        <div class="coverage-track"><div class="coverage-fill" style="width:{{ pct_sectors }}%;"></div></div>
-        <span>{{ coverage.sectors }}/{{ coverage.total }} ({{ "%.0f"|format(pct_sectors) }}%)</span>
+        <div class="coverage-track"><div class="coverage-fill" id="bar-sectors" style="width:{{ pct_sectors }}%;"></div></div>
+        <span id="lbl-sectors">{{ coverage.sectors }}/{{ base }} ({{ "%.0f"|format(pct_sectors) }}%)</span>
     </div>
+</div>
+
+<!-- Fetch All Data -->
+<div class="card">
+    <h2>Fetch All Data</h2>
+    <p style="font-size:13px; color:#636e72; margin-bottom:12px;">Round-robin: financials, market cap, prices per company. Safe to run alongside other jobs.</p>
+    <form method="POST" action="/api/pipeline/fetch-all">
+        <div class="toolbar">
+            <input type="text" name="tickers" placeholder="AAPL, MSFT, ... (blank = all missing)" style="width: 300px;">
+            <button class="btn btn-primary" type="submit">Fetch All Data</button>
+        </div>
+    </form>
 </div>
 
 <!-- Fetch Missing Data -->
 <div class="card">
-    <h2>Fetch Missing Data</h2>
-    <p style="font-size:13px; color:#636e72; margin-bottom:12px;">Download data for all companies that don't have it yet.</p>
+    <h2>Fetch Missing Data (by type)</h2>
     <div class="toolbar">
         <form method="POST" action="/api/pipeline/fetch-missing" style="display:inline;">
             <input type="hidden" name="data_type" value="financials">
@@ -109,7 +142,7 @@
     <h2>Fetch Specific Companies</h2>
     <form method="POST" action="/api/pipeline/run">
         <div class="toolbar">
-            <input type="text" name="tickers" placeholder="AAPL, MSFT, GOOG, ... (comma separated)" style="width: 350px;">
+            <input type="text" name="tickers" placeholder="AAPL, MSFT, ..." style="width: 350px;">
             <select name="refresh_financials" style="min-width:140px;">
                 <option value="">Financials + Market Cap</option>
                 <option value="1">Refresh All Data</option>
@@ -119,7 +152,7 @@
     </form>
     <form method="POST" action="/api/pipeline/fetch-prices" style="margin-top:8px;">
         <div class="toolbar">
-            <input type="text" name="tickers" placeholder="AAPL, MSFT, ... (blank = all with financials)" style="width: 350px;">
+            <input type="text" name="tickers" placeholder="AAPL, MSFT, ... (blank = all)" style="width: 350px;">
             <button class="btn btn-secondary btn-sm" type="submit">Fetch Price History</button>
         </div>
     </form>
@@ -128,7 +161,7 @@
 <!-- Evaluate -->
 <div class="card">
     <h2>DCF Evaluation</h2>
-    <p style="font-size:13px; color:#636e72; margin-bottom:12px;">Run sector analysis, investment analysis, and DCF valuation for all companies with financials.</p>
+    <p style="font-size:13px; color:#636e72; margin-bottom:12px;">Run sector analysis, investment analysis, and DCF valuation.</p>
     <form method="POST" action="/api/pipeline/evaluate">
         <button class="btn btn-primary btn-sm" type="submit">Evaluate All Companies</button>
     </form>
@@ -160,7 +193,6 @@
 <!-- Refresh Stale Data -->
 <div class="card">
     <h2>Refresh Stale Data</h2>
-    <p style="font-size:13px; color:#636e72; margin-bottom:12px;">Re-fetch data for companies whose data is older than a specified number of days.</p>
     <form method="POST" action="/api/pipeline/refresh-stale">
         <div class="toolbar">
             <label>Older than <input type="number" name="days" value="90" min="1" style="width:70px;"> days</label>
@@ -185,85 +217,84 @@
         </form>
     </div>
 </div>
-
-{% if status.failures %}
-<div class="card">
-    <h2>Failures ({{ status.failures|length }})</h2>
-    <table>
-        <thead><tr><th>Ticker</th><th>Error</th><th>Retryable</th><th>Time</th></tr></thead>
-        <tbody>
-        {% for f in status.failures %}
-        <tr>
-            <td>{{ f.ticker }}</td>
-            <td>{{ f.error[:80] }}</td>
-            <td>{{ "Yes" if f.retryable else "No" }}</td>
-            <td>{{ f.timestamp[:19] }}</td>
-        </tr>
-        {% endfor %}
-        </tbody>
-    </table>
-</div>
-{% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script>
-function updateUI(data) {
-    document.getElementById('state').textContent = data.phase || 'idle';
-    document.getElementById('progress').textContent = data.progress || '—';
-    document.getElementById('succeeded').textContent = data.succeeded;
-    document.getElementById('failed').textContent = data.failed;
+const TOTAL = {{ coverage.total }};
 
-    const bar = document.getElementById('progress-bar');
-    const pct = data.total > 0 ? Math.round((data.processed / data.total) * 100) : 0;
-    bar.style.width = pct + '%';
-    bar.textContent = pct > 5 ? pct + '%' : '';
-
-    bar.className = 'progress-bar-fill';
-    if (data.cancel_requested) bar.classList.add('cancelled');
-    else if (data.paused) bar.classList.add('paused');
-    else if (data.phase === 'complete') bar.classList.add('complete');
-    else bar.classList.add('active');
-
-    const controls = document.getElementById('controls');
-    const pauseBtn = document.getElementById('btn-pause');
-    const resumeBtn = document.getElementById('btn-resume');
-    const badge = document.getElementById('paused-badge');
-
-    if (data.running) {
-        controls.style.display = 'flex';
-        pauseBtn.style.display = data.paused ? 'none' : '';
-        resumeBtn.style.display = data.paused ? '' : 'none';
-        badge.style.display = data.paused ? 'inline' : 'none';
-    } else {
-        controls.style.display = 'none';
-        badge.style.display = 'none';
-        if (data.phase === 'complete' || data.phase === 'cancelled') {
-            bar.style.width = '100%';
-            bar.textContent = data.phase === 'complete' ? 'Complete' : 'Cancelled';
-        }
+function updateCoverage(cov) {
+    if (!cov) return;
+    function setBar(id, val) {
+        const pct = TOTAL > 0 ? Math.round(val / TOTAL * 100) : 0;
+        const fill = document.getElementById('bar-' + id);
+        const lbl = document.getElementById('lbl-' + id);
+        if (fill) fill.style.width = pct + '%';
+        if (lbl) lbl.textContent = val + '/' + TOTAL + ' (' + pct + '%)';
     }
+    setBar('fin', cov.financials);
+    setBar('cap', cov.market_caps);
+    setBar('prices', cov.prices);
+    setBar('sectors', cov.sectors);
+    const ids = {active:'cnt-active', no_sec_data:'cnt-nosec', no_data:'cnt-nodata', unknown:'cnt-unknown'};
+    for (const [key, elId] of Object.entries(ids)) {
+        const el = document.getElementById(elId);
+        if (el && cov[key] !== undefined) el.textContent = cov[key];
+    }
+}
+
+function renderJobs(jobs) {
+    const container = document.getElementById('jobs-list');
+    if (!Object.keys(jobs).length) {
+        container.innerHTML = '<p style="color:#636e72; font-size:13px;">No active jobs.</p>';
+        return;
+    }
+    let html = '';
+    for (const [jid, j] of Object.entries(jobs)) {
+        const cls = j.paused ? 'paused' : j.phase === 'complete' ? 'complete' : j.phase === 'cancelled' ? 'cancelled' : '';
+        const pct = j.total > 0 ? Math.round(j.processed / j.total * 100) : 0;
+        const barCls = j.paused ? 'paused' : j.phase === 'complete' ? 'complete' : j.phase === 'cancelled' ? 'cancelled' : 'active';
+        html += `<div class="job-card ${cls}" id="job-${jid}">
+            <div class="job-header">
+                <span class="job-type">${j.type}</span>
+                <span class="job-meta">${jid} | ${j.phase}${j.paused ? ' — PAUSED' : ''}</span>
+            </div>
+            <p style="font-size:13px; margin:4px 0;">${j.progress || 'Starting...'}</p>
+            <p style="font-size:12px; color:#636e72;">Succeeded: ${j.succeeded} | Failed: ${j.failed} | ${j.processed}/${j.total}</p>
+            <div class="progress-bar-container">
+                <div class="progress-bar-fill ${barCls}" style="width:${pct}%;">${pct > 5 ? pct + '%' : ''}</div>
+            </div>`;
+        if (j.running) {
+            html += `<div style="display:flex; gap:6px; margin-top:4px;">`;
+            if (j.paused) {
+                html += `<button class="btn btn-primary btn-sm" onclick="jobAction('resume','${jid}')">Resume</button>`;
+            } else {
+                html += `<button class="btn btn-secondary btn-sm" onclick="jobAction('pause','${jid}')">Pause</button>`;
+            }
+            html += `<button class="btn btn-danger btn-sm" onclick="if(confirm('Cancel this job?')) jobAction('cancel','${jid}')">Cancel</button></div>`;
+        }
+        html += '</div>';
+    }
+    container.innerHTML = html;
+}
+
+function jobAction(action, jobId) {
+    fetch('/api/pipeline/' + action, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({job_id: jobId})
+    }).then(() => pollStatus());
 }
 
 function pollStatus() {
     fetch('/api/pipeline/status')
         .then(r => r.json())
         .then(data => {
-            updateUI(data);
-            if (data.running) setTimeout(pollStatus, 1000);
+            renderJobs(data.jobs);
+            if (data.coverage) updateCoverage(data.coverage);
+            const anyRunning = Object.values(data.jobs).some(j => j.running);
+            if (anyRunning) setTimeout(pollStatus, 1500);
         });
-}
-
-function pausePipeline() {
-    fetch('/api/pipeline/pause', {method: 'POST'}).then(() => pollStatus());
-}
-function resumePipeline() {
-    fetch('/api/pipeline/resume', {method: 'POST'}).then(() => pollStatus());
-}
-function cancelPipeline() {
-    if (confirm('Cancel the running pipeline? Progress so far is saved.')) {
-        fetch('/api/pipeline/cancel', {method: 'POST'}).then(() => pollStatus());
-    }
 }
 
 pollStatus();

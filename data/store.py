@@ -13,13 +13,14 @@ def _save_financials(db, ticker, data):
         db.execute(
             """INSERT OR REPLACE INTO financials
                (ticker, year, operating_cf, capex, fcf, revenue, net_income, debt, cash, shares,
-                r_and_d, acquisitions, total_investment, fetched_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                r_and_d, acquisitions, total_investment, data_source, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 ticker, year, row.get("operating_cf"), row.get("capex"),
                 row.get("fcf"), row.get("revenue"), row.get("net_income"),
                 row.get("debt"), row.get("cash"), row.get("shares"),
-                row.get("r_and_d"), row.get("acquisitions"), row.get("total_investment"), now,
+                row.get("r_and_d"), row.get("acquisitions"), row.get("total_investment"),
+                row.get("data_source", "sec_edgar"), now,
             ),
         )
     db.commit()
@@ -38,16 +39,16 @@ def _load_completed(db, table):
     return {r[0] for r in rows}
 
 
-def _load_delisted(db):
-    rows = db.execute("SELECT ticker FROM companies WHERE status = 'delisted'").fetchall()
+def _load_excluded(db):
+    rows = db.execute("SELECT ticker FROM companies WHERE status IN ('delisted', 'no_data')").fetchall()
     return {r[0] for r in rows}
 
 
 def _filter_active(tickers, db):
-    delisted = _load_delisted(db)
-    active = [t for t in tickers if t not in delisted]
+    excluded = _load_excluded(db)
+    active = [t for t in tickers if t not in excluded]
     if len(tickers) != len(active):
-        log.info("Skipping %d delisted tickers", len(tickers) - len(active))
+        log.info("Skipping %d excluded tickers (delisted/no_data)", len(tickers) - len(active))
     return active
 
 

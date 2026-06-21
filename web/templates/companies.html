@@ -73,7 +73,7 @@
         {% for c in companies %}
         <tr>
             <td><input type="checkbox" class="ticker-cb" value="{{ c.ticker }}" onchange="updateCount()"></td>
-            <td><a href="/company/{{ c.ticker }}">{{ c.ticker }}</a></td>
+            <td><a href="/company/{{ c.ticker }}">{{ c.ticker }}</a>{% if c.data_source == 'yahoo_finance' %} <span style="background:#fdcb6e; color:#2d3436; padding:0 4px; border-radius:3px; font-size:10px;" title="Yahoo Finance data">YF</span>{% endif %}</td>
             <td>{{ c.name or "—" }}</td>
             <td>{{ c.sector or "—" }}</td>
             <td>{{ "${:,.0f}M".format(c.market_cap / 1e6) if c.market_cap else "—" }}</td>
@@ -173,7 +173,10 @@ function bulkRefetch() {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({tickers: tickers})
-    }).then(() => window.location.href = '/pipeline');
+    }).then(r => r.json()).then(data => {
+        if (data.error) alert(data.error);
+        else window.location.href = '/pipeline';
+    });
 }
 function bulkEvaluate() {
     const tickers = getSelected();
@@ -182,7 +185,10 @@ function bulkEvaluate() {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({tickers: tickers})
-    }).then(r => r.json()).then(data => alert(data.message));
+    }).then(r => r.json()).then(data => {
+        if (data.error) alert(data.error);
+        else { alert(data.message); window.location.href = '/pipeline'; }
+    });
 }
 function filterTable() {
     const q = document.getElementById('search').value.toUpperCase();
