@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Screener{% endblock %}
+{% block content %}
+<h1 style="margin-bottom: 20px;">Screener</h1>
+
+<div class="card">
+    <h2>Filters</h2>
+    <form method="GET" action="/screener">
+        <div class="toolbar">
+            <label>Sector
+                <select name="sector" style="min-width:150px;">
+                    <option value="">All Sectors</option>
+                    {% for s in sectors %}
+                    <option value="{{ s }}" {% if filters.sector == s %}selected{% endif %}>{{ s }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>Min FCF ($B) <input type="number" name="min_fcf" step="0.1" value="{{ filters.min_fcf or '' }}" style="width:100px;"></label>
+            <label>Max Debt ($B) <input type="number" name="max_debt" step="0.1" value="{{ filters.max_debt or '' }}" style="width:100px;"></label>
+            <label>Min Revenue ($B) <input type="number" name="min_revenue" step="0.1" value="{{ filters.min_revenue or '' }}" style="width:100px;"></label>
+            <label>Min Cash ($B) <input type="number" name="min_cash" step="0.1" value="{{ filters.min_cash or '' }}" style="width:100px;"></label>
+            <button class="btn btn-primary btn-sm" type="submit">Apply</button>
+            <a href="/screener" class="btn btn-secondary btn-sm">Reset</a>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <div class="toolbar">
+        <h2 style="margin-bottom:0;">Results ({{ results|length }})</h2>
+        <button class="btn btn-primary btn-sm" onclick="bulkRefetch()" style="margin-left:auto;">Refetch Selected</button>
+        <button class="btn btn-secondary btn-sm" onclick="bulkEvaluate()">Re-evaluate Selected</button>
+        <span id="selected-count" style="font-size: 13px; color: #636e72;"></span>
+    </div>
+    <div class="alert alert-info" style="margin-top:12px;">
+        DCF valuation column will be available once dcf_model.py is built. Currently showing raw financial filters only.
+    </div>
+    <table id="results-table">
+        <thead>
+            <tr>
+                <th><input type="checkbox" id="select-all" onclick="toggleAll(this)"></th>
+                <th>Ticker</th>
+                <th>Name</th>
+                <th>Sector</th>
+                <th>Market Cap</th>
+                <th>FCF</th>
+                <th>Revenue</th>
+                <th>Debt</th>
+                <th>Cash</th>
+                <th>DCF Value</th>
+                <th>Margin of Safety</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for r in results %}
+        <tr>
+            <td><input type="checkbox" class="ticker-cb" value="{{ r.ticker }}" onchange="updateCount()"></td>
+            <td><a href="/company/{{ r.ticker }}">{{ r.ticker }}</a></td>
+            <td>{{ r.name or "—" }}</td>
+            <td>{{ r.sector or "—" }}</td>
+            <td>{{ "${:,.0f}B".format(r.market_cap / 1e9) if r.market_cap else "—" }}</td>
+            <td>{{ "${:,.0f}B".format(r.fcf / 1e9) if r.fcf else "—" }}</td>
+            <td>{{ "${:,.0f}B".format(r.revenue / 1e9) if r.revenue else "—" }}</td>
+            <td>{{ "${:,.0f}B".format(r.debt / 1e9) if r.debt else "—" }}</td>
+            <td>{{ "${:,.0f}B".format(r.cash / 1e9) if r.cash else "—" }}</td>
+            <td>—</td>
+            <td>—</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleAll(el) {
+    document.querySelectorAll('.ticker-cb').forEach(cb => cb.checked = el.checked);
+    updateCount();
+}
+function updateCount() {
+    const n = document.querySelectorAll('.ticker-cb:checked').length;
+    document.getElementById('selected-count').textContent = n ? n + ' selected' : '';
+}
+function getSelected() {
+    return Array.from(document.querySelectorAll('.ticker-cb:checked')).map(cb => cb.value);
+}
+function bulkRefetch() {
+    const tickers = getSelected();
+    if (!tickers.length) { alert('Select at least one company'); return; }
+    fetch('/api/companies/bulk-refetch', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({tickers: tickers})
+    }).then(() => window.location.href = '/pipeline');
+}
+function bulkEvaluate() {
+    const tickers = getSelected();
+    if (!tickers.length) { alert('Select at least one company'); return; }
+    fetch('/api/companies/bulk-evaluate', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({tickers: tickers})
+    }).then(r => r.json()).then(data => alert(data.message));
+}
+</script>
+{% endblock %}

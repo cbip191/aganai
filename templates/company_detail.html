@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}{{ ticker }}{% endblock %}
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+    <div>
+        <h1>{{ ticker }}{% if company %} — {{ company.name }}{% endif %}</h1>
+        {% if company and company.sector %}
+        <p style="color: #636e72; margin-top: 4px;">{{ company.sector }}{% if company.industry %} / {{ company.industry }}{% endif %}</p>
+        {% endif %}
+    </div>
+    <form method="POST" action="/api/company/{{ ticker }}/refetch" style="display:inline;">
+        <button class="btn btn-primary btn-sm" type="submit">Refetch Data</button>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Market Cap History</h2>
+    {% if cap_dates %}
+    <canvas id="capChart" height="80"></canvas>
+    {% else %}
+    <p style="color: #636e72;">No market cap data yet.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>Financials (10-K)</h2>
+    {% if financials %}
+    <div style="overflow-x: auto;">
+    <table>
+        <thead>
+            <tr>
+                <th>Year</th>
+                <th>Revenue</th>
+                <th>Net Income</th>
+                <th>Operating CF</th>
+                <th>CapEx</th>
+                <th>FCF</th>
+                <th>Debt</th>
+                <th>Cash</th>
+                <th>Shares</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for f in financials %}
+        <tr id="row-{{ f.year }}">
+            <td>{{ f.year }}</td>
+            <td>{{ "${:,.0f}".format(f.revenue / 1e6) + "M" if f.revenue else "—" }}</td>
+            <td>{{ "${:,.0f}".format(f.net_income / 1e6) + "M" if f.net_income else "—" }}</td>
+            <td>{{ "${:,.0f}".format(f.operating_cf / 1e6) + "M" if f.operating_cf else "—" }}</td>
+            <td>{{ "${:,.0f}".format(f.capex / 1e6) + "M" if f.capex else "—" }}</td>
+            <td>{{ "${:,.0f}".format(f.fcf / 1e6) + "M" if f.fcf else "—" }}</td>
+            <td>{{ "${:,.0f}".format(f.debt / 1e6) + "M" if f.debt else "—" }}</td>
+            <td>{{ "${:,.0f}".format(f.cash / 1e6) + "M" if f.cash else "—" }}</td>
+            <td>{{ "{:,.0f}".format(f.shares / 1e6) + "M" if f.shares else "—" }}</td>
+            <td><button class="btn btn-sm btn-secondary" onclick="editRow({{ f.year }})">Edit</button></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: #636e72;">No financial data yet.</p>
+    {% endif %}
+</div>
+
+<div id="edit-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.4); z-index:100;">
+    <div style="background:#fff; max-width:500px; margin:80px auto; padding:24px; border-radius:8px;">
+        <h2 style="margin-bottom:16px;">Edit <span id="edit-ticker">{{ ticker }}</span> — Year <span id="edit-year"></span></h2>
+        <form id="edit-form">
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                <label>Revenue<input type="number" name="revenue" step="any" style="width:100%;"></label>
+                <label>Net Income<input type="number" name="net_income" step="any" style="width:100%;"></label>
+                <label>Operating CF<input type="number" name="operating_cf" step="any" style="width:100%;"></label>
+                <label>CapEx<input type="number" name="capex" step="any" style="width:100%;"></label>
+                <label>Debt<input type="number" name="debt" step="any" style="width:100%;"></label>
+                <label>Cash<input type="number" name="cash" step="any" style="width:100%;"></label>
+                <label>Shares<input type="number" name="shares" step="any" style="width:100%;"></label>
+            </div>
+            <div style="margin-top:16px; display:flex; gap:8px;">
+                <button type="submit" class="btn btn-primary">Save</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+{% if cap_dates %}
+new Chart(document.getElementById('capChart'), {
+    type: 'line',
+    data: {
+        labels: {{ cap_dates|tojson }},
+        datasets: [{
+            label: 'Market Cap ($B)',
+            data: {{ cap_values|tojson }},
+            borderColor: '#0984e3',
+            backgroundColor: 'rgba(9,132,227,0.1)',
+            fill: true,
+            tension: 0.3
+        }]
+    },
+    options: {
+        scales: { y: { beginAtZero: false } },
+        plugins: { legend: { display: false } }
+    }
+});
+{% endif %}
+
+let editYear = null;
+function editRow(year) {
+    editYear = year;
+    document.getElementById('edit-year').textContent = year;
+    document.getElementById('edit-modal').style.display = 'block';
+    document.getElementById('edit-form').reset();
+}
+function closeModal() {
+    document.getElementById('edit-modal').style.display = 'none';
+}
+document.getElementById('edit-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const data = {};
+    new FormData(this).forEach((v, k) => { if (v) data[k] = parseFloat(v); });
+    data.year = editYear;
+    fetch('/api/company/{{ ticker }}/update', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    }).then(() => window.location.reload());
+});
+</script>
+{% endblock %}

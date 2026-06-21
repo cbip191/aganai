@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}Companies{% endblock %}
+{% block content %}
+<style>
+    th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
+    th.sortable:hover { color:#0984e3; }
+    .sort-arrow { font-size:10px; margin-left:4px; }
+    .filter-btn { background:none; border:none; cursor:pointer; font-size:11px; color:#636e72; margin-left:4px; vertical-align:middle; }
+    .filter-btn:hover { color:#0984e3; }
+    .filter-btn.active { color:#0984e3; }
+    .dropdown-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; z-index:99; }
+    .sector-dropdown { display:none; position:absolute; background:#fff; border:1px solid #ddd; border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,0.12); z-index:100; width:260px; padding:8px 0; }
+    .sector-dropdown .dd-search { width:calc(100% - 16px); margin:0 8px 6px; padding:6px 8px; border:1px solid #ddd; border-radius:4px; font-size:13px; }
+    .sector-dropdown .dd-list { max-height:240px; overflow-y:auto; }
+    .sector-dropdown label { display:flex; align-items:center; gap:6px; padding:4px 12px; font-size:13px; cursor:pointer; }
+    .sector-dropdown label:hover { background:#f0f0f0; }
+    .sector-dropdown .dd-actions { display:flex; gap:6px; padding:6px 8px 2px; border-top:1px solid #eee; margin-top:4px; }
+</style>
+
+<h1 style="margin-bottom: 20px;">Companies</h1>
+
+<div class="card">
+    <div class="toolbar">
+        <input type="text" id="search" placeholder="Search ticker or name..." style="width: 250px;" onkeyup="filterTable()">
+        <button class="btn btn-primary btn-sm" onclick="bulkRefetch()">Refetch Selected</button>
+        <button class="btn btn-secondary btn-sm" onclick="bulkEvaluate()">Re-evaluate Selected</button>
+        <span id="selected-count" style="font-size: 13px; color: #636e72;"></span>
+    </div>
+
+    {% if selected_sectors %}
+    <div style="margin:8px 0; display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+        <span style="font-size:12px; color:#636e72;">Filtered:</span>
+        {% for s in selected_sectors %}
+        <span style="background:#0984e3; color:#fff; padding:2px 8px; border-radius:10px; font-size:12px;">{{ s }} <span style="cursor:pointer; margin-left:2px;" onclick="removeSector('{{ s }}')">&times;</span></span>
+        {% endfor %}
+        <a href="javascript:void(0)" onclick="clearSectors()" style="font-size:12px; margin-left:4px;">Clear all</a>
+    </div>
+    {% endif %}
+
+    <div style="position:relative; display:inline-block;">
+        <div class="dropdown-overlay" id="dd-overlay" onclick="closeDropdown()"></div>
+        <div class="sector-dropdown" id="sector-dropdown">
+            <input type="text" class="dd-search" id="dd-search" placeholder="Search sectors..." oninput="filterSectors()">
+            <div class="dd-list" id="dd-list">
+                {% for s in sectors %}
+                <label class="dd-item"><input type="checkbox" value="{{ s }}" {% if s in selected_sectors %}checked{% endif %}> {{ s }}</label>
+                {% endfor %}
+            </div>
+            <div class="dd-actions">
+                <button class="btn btn-primary btn-sm" onclick="applySectors()">Apply</button>
+                <button class="btn btn-secondary btn-sm" onclick="closeDropdown()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <table id="companies-table">
+        <thead>
+            <tr>
+                <th><input type="checkbox" id="select-all" onclick="toggleAll(this)"></th>
+                {% for col, label in [('ticker','Ticker'),('name','Name')] %}
+                <th class="sortable" onclick="sortBy('{{ col }}')">{{ label }}{% if sort_by == col %}<span class="sort-arrow">{{ "▲" if sort_dir == "asc" else "▼" }}</span>{% endif %}</th>
+                {% endfor %}
+                <th class="sortable" onclick="sortBy('sector')">
+                    Sector{% if sort_by == 'sector' %}<span class="sort-arrow">{{ "▲" if sort_dir == "asc" else "▼" }}</span>{% endif %}
+                    <button class="filter-btn {% if selected_sectors %}active{% endif %}" onclick="event.stopPropagation(); openDropdown()" title="Filter by sector">&#9660;</button>
+                </th>
+                {% for col, label in [('market_cap','Market Cap'),('fcf','FCF'),('revenue','Revenue'),('debt','Debt'),('cash','Cash'),('years','Years')] %}
+                <th class="sortable" onclick="sortBy('{{ col }}')">{{ label }}{% if sort_by == col %}<span class="sort-arrow">{{ "▲" if sort_dir == "asc" else "▼" }}</span>{% endif %}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+        {% for c in companies %}
+        <tr>
+            <td><input type="checkbox" class="ticker-cb" value="{{ c.ticker }}" onchange="updateCount()"></td>
+            <td><a href="/company/{{ c.ticker }}">{{ c.ticker }}</a></td>
+            <td>{{ c.name or "—" }}</td>
+            <td>{{ c.sector or "—" }}</td>
+            <td>{{ "${:,.0f}B".format(c.market_cap / 1e9) if c.market_cap else "—" }}</td>
+            <td>{{ "${:,.0f}B".format(c.fcf / 1e9) if c.fcf else "—" }}</td>
+            <td>{{ "${:,.0f}B".format(c.revenue / 1e9) if c.revenue else "—" }}</td>
+            <td>{{ "${:,.0f}B".format(c.debt / 1e9) if c.debt else "—" }}</td>
+            <td>{{ "${:,.0f}B".format(c.cash / 1e9) if c.cash else "—" }}</td>
+            <td>{{ c.years }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:16px; font-size:14px;">
+        <span style="color:#636e72;">Showing page {{ page }} of {{ total_pages }} ({{ total_count }} companies)</span>
+        <div style="display:flex; gap:8px;">
+            {% if page > 1 %}
+            <a id="prev-link" class="btn btn-secondary btn-sm">Previous</a>
+            {% endif %}
+            {% if page < total_pages %}
+            <a id="next-link" class="btn btn-secondary btn-sm">Next</a>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const currentSort = '{{ sort_by }}';
+const currentDir = '{{ sort_dir }}';
+const currentSectors = {{ selected_sectors|tojson }};
+
+function buildUrl(params) {
+    const base = new URLSearchParams(window.location.search);
+    for (const [k, v] of Object.entries(params)) {
+        if (k === 'sector') {
+            base.delete('sector');
+            v.forEach(s => base.append('sector', s));
+        } else {
+            base.set(k, v);
+        }
+    }
+    return '/companies?' + base.toString();
+}
+
+function sortBy(col) {
+    let dir = 'desc';
+    if (col === currentSort) dir = currentDir === 'desc' ? 'asc' : 'desc';
+    if ((col === 'ticker' || col === 'name' || col === 'sector') && col !== currentSort) dir = 'asc';
+    window.location.href = buildUrl({sort: col, dir: dir, page: 1});
+}
+
+function openDropdown() {
+    document.getElementById('sector-dropdown').style.display = 'block';
+    document.getElementById('dd-overlay').style.display = 'block';
+    document.getElementById('dd-search').focus();
+}
+function closeDropdown() {
+    document.getElementById('sector-dropdown').style.display = 'none';
+    document.getElementById('dd-overlay').style.display = 'none';
+}
+function filterSectors() {
+    const q = document.getElementById('dd-search').value.toUpperCase();
+    document.querySelectorAll('.dd-item').forEach(el => {
+        el.style.display = el.textContent.toUpperCase().includes(q) ? '' : 'none';
+    });
+}
+function applySectors() {
+    const checked = Array.from(document.querySelectorAll('#dd-list input:checked')).map(cb => cb.value);
+    window.location.href = buildUrl({sector: checked, page: 1});
+}
+function removeSector(s) {
+    const sectors = currentSectors.filter(x => x !== s);
+    window.location.href = buildUrl({sector: sectors, page: 1});
+}
+function clearSectors() {
+    window.location.href = buildUrl({sector: [], page: 1});
+}
+
+function toggleAll(el) {
+    document.querySelectorAll('.ticker-cb').forEach(cb => {
+        if (!cb.closest('tr').classList.contains('hidden')) cb.checked = el.checked;
+    });
+    updateCount();
+}
+function updateCount() {
+    const n = document.querySelectorAll('.ticker-cb:checked').length;
+    document.getElementById('selected-count').textContent = n ? n + ' selected' : '';
+}
+function getSelected() {
+    return Array.from(document.querySelectorAll('.ticker-cb:checked')).map(cb => cb.value);
+}
+function bulkRefetch() {
+    const tickers = getSelected();
+    if (!tickers.length) { alert('Select at least one company'); return; }
+    fetch('/api/companies/bulk-refetch', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({tickers: tickers})
+    }).then(() => window.location.href = '/pipeline');
+}
+function bulkEvaluate() {
+    const tickers = getSelected();
+    if (!tickers.length) { alert('Select at least one company'); return; }
+    fetch('/api/companies/bulk-evaluate', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({tickers: tickers})
+    }).then(r => r.json()).then(data => alert(data.message));
+}
+function filterTable() {
+    const q = document.getElementById('search').value.toUpperCase();
+    document.querySelectorAll('#companies-table tbody tr').forEach(row => {
+        const text = row.textContent.toUpperCase();
+        const hide = q && !text.includes(q);
+        row.classList.toggle('hidden', hide);
+        row.style.display = hide ? 'none' : '';
+    });
+}
+
+const prevLink = document.getElementById('prev-link');
+const nextLink = document.getElementById('next-link');
+if (prevLink) prevLink.href = buildUrl({page: {{ page - 1 }}});
+if (nextLink) nextLink.href = buildUrl({page: {{ page + 1 }}});
+</script>
+{% endblock %}
